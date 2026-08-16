@@ -136,6 +136,46 @@ export async function readNativeJson(
   }
 }
 
+export type NativeSetlist = {
+  id: string; // filename stem
+  name: string; // display name from JSON
+  songs: string[];
+};
+
+/** Read-only setlists/ scan (setlists are edited on the PC web UI). */
+export async function listNativeSetlists(): Promise<NativeSetlist[]> {
+  let root: ReaddirResult;
+  try {
+    root = await Filesystem.readdir({
+      path: "setlists",
+      directory: Directory.External,
+    });
+  } catch {
+    return [];
+  }
+
+  const out: NativeSetlist[] = [];
+  for (const entry of root.files) {
+    if (entry.type === "directory" || !entry.name.endsWith(".json")) continue;
+    const id = entry.name.slice(0, -".json".length);
+    const text = await readTextFile(`setlists/${entry.name}`);
+    if (text == null) continue;
+    try {
+      const v = JSON.parse(text) as { name?: unknown; songs?: unknown };
+      out.push({
+        id,
+        name: typeof v.name === "string" ? v.name : id,
+        songs: Array.isArray(v.songs)
+          ? v.songs.filter((s): s is string => typeof s === "string")
+          : [],
+      });
+    } catch {
+      /* skip corrupt */
+    }
+  }
+  return out;
+}
+
 /** Write practice.json (markers + stanza tags) for a song. */
 export async function writeNativeJson(
   slug: string,

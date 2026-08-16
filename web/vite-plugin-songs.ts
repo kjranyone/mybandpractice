@@ -121,10 +121,99 @@ function safeJoin(root: string, ...parts: string[]): string | null {
   return resolved;
 }
 
-function attachMiddleware(middlewares: Connect.Server, songsDir: string) {
+function attachMiddleware(
+  middlewares: Connect.Server,
+  songsDir: string,
+  setlistsDir: string,
+) {
   middlewares.use((req: IncomingMessage, res: ServerResponse, next: Connect.NextFunction) => {
     const rawUrl = req.url ?? "";
     const url = new URL(rawUrl, "http://localhost");
+
+    // ---- setlists (ordered song lists) ----
+    // URL segment is a filesystem-safe id (slug); the display name lives
+    // inside the JSON so it may contain any unicode.
+    const safeId = (p: string) =>
+      p
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "")
+        .replace(/[. ]+$/, "")
+        .trim();
+
+    if (url.pathname === "/api/setlists" && req.method === "GET") {
+      const out: unknown[] = [];
+      if (fs.existsSync(setlistsDir)) {
+        for (const f of fs.readdirSync(setlistsDir)) {
+          if (!f.endsWith(".json")) continue;
+          try {
+            const v = JSON.parse(
+              fs.readFileSync(path.join(setlistsDir, f), "utf-8"),
+            ) as { name?: unknown; songs?: unknown };
+            out.push({
+              id: f.slice(0, -".json".length),
+              name: typeof v.name === "string" ? v.name : f,
+              songs: Array.isArray(v.songs)
+                ? v.songs.filter((s): s is string => typeof s === "string")
+                : [],
+            });
+          } catch {
+            /* skip corrupt */
+          }
+        }
+      }
+      sendJson(res, 200, out);
+      return;
+    }
+
+    const setlistMatch = url.pathname.match(/^\/api\/setlists\/([^/]+)$/);
+    if (setlistMatch) {
+      void (async () => {
+        const id = safeId(decodeURIComponent(setlistMatch[1]));
+        if (!id) {
+          sendJson(res, 400, { error: "Invalid id" });
+          return;
+        }
+        const file = path.join(setlistsDir, `${id}.json`);
+
+        if (req.method === "PUT") {
+          let body = "";
+          for await (const chunk of req) body += chunk as string;
+          let data: unknown;
+          try {
+            data = JSON.parse(body);
+          } catch {
+            sendJson(res, 400, { error: "Invalid JSON" });
+            return;
+          }
+          const d = data as { name?: unknown; songs?: unknown };
+          if (
+            typeof d.name !== "string" ||
+            !Array.isArray(d.songs) ||
+            !d.songs.every((s) => typeof s === "string")
+          ) {
+            sendJson(res, 400, { error: "Expected { name, songs: string[] }" });
+            return;
+          }
+          fs.mkdirSync(setlistsDir, { recursive: true });
+          fs.writeFileSync(
+            file,
+            JSON.stringify({ name: d.name, songs: d.songs }, null, 2) + "\n",
+            "utf-8",
+          );
+          sendJson(res, 200, { ok: true });
+          return;
+        }
+
+        if (req.method === "DELETE") {
+          if (fs.existsSync(file)) fs.unlinkSync(file);
+          sendJson(res, 200, { ok: true });
+          return;
+        }
+
+        res.statusCode = 405;
+        res.end();
+      })();
+      return;
+    }
 
     // GET /api/songs.json  (static-file variant for Capacitor builds)
     if (url.pathname === "/api/songs.json") {
@@ -297,12 +386,14 @@ function attachMiddleware(middlewares: Connect.Server, songsDir: string) {
   });
 }
 
-/** Serves `../songs` at /songs and exposes /api/songs for the React app. */
-export function songsPlugin(songsDir: string): Plugin {
+/** Serves `../songs` at /songs, `../setlists` via /api/setlists,
+ * and exposes /api/songs for the React app. */
+export function songsPlugin(songsDir: string, setlistsDir?: string): Plugin {
   const resolved = path.resolve(songsDir);
+  const resolvedSetlists = path.resolve(setlistsDir ?? path.join(path.dirname(resolved), "setlists"));
 
   const setup = (server: ViteDevServer | PreviewServer) => {
-    attachMiddleware(server.middlewares, resolved);
+    attachMiddleware(server.middlewares, resolved, resolvedSetlists);
   };
 
   return {

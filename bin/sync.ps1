@@ -88,6 +88,15 @@ function Sync-Songs {
   & $adbExe -s $target shell "mkdir -p $DeviceSongsDir"
   & $adbExe -s $target push "$Songs/." $DeviceSongsDir
   if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
+
+  $Setlists = Join-Path $Root "setlists"
+  $DeviceSetlistsDir = "/storage/emulated/0/Android/data/$Pkg/files/setlists"
+  Write-Host "==> pushing setlists/ -> $DeviceSetlistsDir ..." -ForegroundColor Cyan
+  & $adbExe -s $target shell "mkdir -p $DeviceSetlistsDir"
+  if (Test-Path $Setlists) {
+    & $adbExe -s $target push "$Setlists/." $DeviceSetlistsDir
+    if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
+  }
 }
 
 if (-not $SongsOnly) { Install-App }

@@ -5,23 +5,50 @@ import { PlayerBar } from "./components/PlayerBar";
 import { nextPlaybackMode, useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMarkers } from "./hooks/useMarkers";
 import { useLyrics, useSongs } from "./hooks/useSongs";
+import { useSetlists } from "./hooks/useSetlists";
 import "./App.css";
+
+const MODE_KEY = "mbp:mode";
 
 export default function App() {
   const { songs, loading, error } = useSongs();
-  const player = useAudioPlayer(songs);
+  const setlistState = useSetlists();
   const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<string | null>(() =>
+    localStorage.getItem(MODE_KEY),
+  );
+
+  useEffect(() => {
+    if (mode == null) localStorage.removeItem(MODE_KEY);
+    else localStorage.setItem(MODE_KEY, mode);
+  }, [mode]);
+
+  // Resolve a stale saved mode (deleted setlist) back to all songs
+  const activeSetlist =
+    setlistState.setlists.find((s) => s.id === mode) ?? null;
+  const effectiveMode = activeSetlist ? mode : null;
+
+  // Playback order: setlist order when active, otherwise all songs
+  const playlistSongs = useMemo(() => {
+    if (!activeSetlist) return songs;
+    const bySlug = new Map(songs.map((s) => [s.slug, s]));
+    return activeSetlist.songs
+      .map((slug) => bySlug.get(slug))
+      .filter((s): s is NonNullable<typeof s> => s != null);
+  }, [songs, activeSetlist]);
+
+  const player = useAudioPlayer(playlistSongs);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return songs;
-    return songs.filter(
+    if (!q) return playlistSongs;
+    return playlistSongs.filter(
       (s) =>
         s.title.toLowerCase().includes(q) ||
         s.artist.toLowerCase().includes(q) ||
         s.slug.toLowerCase().includes(q),
     );
-  }, [songs, query]);
+  }, [playlistSongs, query]);
 
   const lyrics = useLyrics(player.current?.slug ?? null);
   const markerState = useMarkers(player.current?.slug ?? null);
@@ -150,12 +177,21 @@ export default function App() {
     <div className="app">
       <div className="app-body">
         <SongList
-          songs={filtered}
+          songs={songs}
+          displaySongs={filtered}
           currentSlug={player.current?.slug ?? null}
           playing={player.playing}
           query={query}
           onQueryChange={setQuery}
           onSelect={(song) => void player.playSong(song)}
+          mode={effectiveMode}
+          onModeChange={setMode}
+          setlists={setlistState.setlists}
+          activeSetlist={activeSetlist}
+          editable={setlistState.editable}
+          onSaveSetlist={(sl) => void setlistState.save(sl)}
+          onRemoveSetlist={(id) => void setlistState.remove(id)}
+          onCreate={setlistState.create}
         />
         <LyricsPanel
           song={player.current}

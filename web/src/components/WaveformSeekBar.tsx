@@ -14,7 +14,6 @@ import { loadWaveformPeaks, syntheticPeaks } from "../utils/waveform";
 type DragMode =
   | null
   | { kind: "seek" }
-  | { kind: "select"; anchor: number }
   | { kind: "loop-start" }
   | { kind: "loop-end" }
   | { kind: "loop-body"; offset: number; length: number };
@@ -74,8 +73,10 @@ export function WaveformSeekBar({
   );
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
   const dragRef = useRef<DragMode>(null);
-  const pointerStartRef = useRef<{ x: number; t: number } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const loopDragRef = useRef<{ anchor: number; x: number; moved: boolean } | null>(
+    null,
+  );
   const [markerEditor, setMarkerEditor] = useState<MarkerEditor | null>(null);
   const longPressRef = useRef<{ timer: number; x: number } | null>(null);
   const flagDragRef = useRef<{ id: string; x: number; moved: boolean } | null>(
@@ -158,7 +159,6 @@ export function WaveformSeekBar({
     e.currentTarget.setPointerCapture(e.pointerId);
     const ratio = clientXToRatio(e.clientX);
     const t = ratioToTime(ratio);
-    pointerStartRef.current = { x: e.clientX, t };
 
     if (handle === "start" && loop) {
       dragRef.current = { kind: "loop-start" };
@@ -189,9 +189,8 @@ export function WaveformSeekBar({
     const x = e.clientX;
     const timer = window.setTimeout(() => {
       longPressRef.current = null;
-      // Held still: cancel the pending seek/select and open the marker editor
+      // Held still: cancel the pending seek and open the marker editor
       dragRef.current = null;
-      pointerStartRef.current = null;
       setDragging(false);
       setMarkerEditor({
         markerId: null,
@@ -210,26 +209,9 @@ export function WaveformSeekBar({
     const t = ratioToTime(ratio);
     const mode = dragRef.current;
 
+    // Waveform drag = scrub seek only (loop selection lives on the time bar)
     if (mode.kind === "seek") {
-      const start = pointerStartRef.current;
-      if (start && Math.abs(e.clientX - start.x) > DRAG_THRESHOLD_PX) {
-        // Convert to loop select; moving cancels the long-press
-        clearLongPress();
-        dragRef.current = { kind: "select", anchor: start.t };
-        const a = Math.min(start.t, t);
-        const b = Math.max(start.t, t);
-        onLoopChange({ start: a, end: b });
-        onLoopEnable(true);
-      } else {
-        onSeek(t);
-      }
-      return;
-    }
-
-    if (mode.kind === "select") {
-      const a = Math.min(mode.anchor, t);
-      const b = Math.max(mode.anchor, t);
-      onLoopChange({ start: a, end: b });
+      onSeek(t);
       return;
     }
 
@@ -256,8 +238,45 @@ export function WaveformSeekBar({
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
     dragRef.current = null;
-    pointerStartRef.current = null;
     setDragging(false);
+  };
+
+  // --- Time bar (above the waveform): drag = select loop, tap = seek ---
+  const onTimeBarPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (markerEditor) setMarkerEditor(null);
+    if (disabled || !duration) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const t = ratioToTime(clientXToRatio(e.clientX));
+    loopDragRef.current = { anchor: t, x: e.clientX, moved: false };
+  };
+
+  const onTimeBarPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const ld = loopDragRef.current;
+    if (!ld || !duration) return;
+    if (
+      !ld.moved &&
+      Math.abs(e.clientX - ld.x) <= DRAG_THRESHOLD_PX
+    )
+      return;
+    ld.moved = true;
+    const t = ratioToTime(clientXToRatio(e.clientX));
+    onLoopChange({
+      start: Math.min(ld.anchor, t),
+      end: Math.max(ld.anchor, t),
+    });
+    onLoopEnable(true);
+  };
+
+  const onTimeBarPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const ld = loopDragRef.current;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    loopDragRef.current = null;
+    if (ld && !ld.moved) {
+      // Tap without drag = seek
+      onSeek(ratioToTime(clientXToRatio(e.clientX)));
+    }
   };
 
   // --- Marker flags: drag to move, click to edit ---
@@ -335,7 +354,27 @@ export function WaveformSeekBar({
 
   return (
     <div className="waveform-wrap">
-      <div className="waveform-times">
+      <div
+        className={`waveform-times${disabled ? " is-disabled" : ""}`}
+        title="Drag to select loop · Tap to seek"
+        onPointerDown={onTimeBarPointerDown}
+        onPointerMove={onTimeBarPointerMove}
+        onPointerUp={onTimeBarPointerUp}
+        onPointerCancel={onTimeBarPointerUp}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {/* Loop selection track */}
+        <div className="loop-strip-line" aria-hidden />
+        {loop && duration > 0 && (
+          <div
+            className={`loop-strip-range${loopEnabled ? " is-active" : ""}`}
+            style={{
+              left: `${loopStartR * 100}%`,
+              width: `${Math.max(0, (loopEndR - loopStartR) * 100)}%`,
+            }}
+            aria-hidden
+          />
+        )}
         <span className="mono">{formatTimePrecise(currentTime)}</span>
         {hoverTime != null && !disabled && (
           <span className="waveform-hover mono">
@@ -349,7 +388,7 @@ export function WaveformSeekBar({
         ref={trackRef}
         className={`waveform${disabled ? " is-disabled" : ""}${dragging ? " is-dragging" : ""}`}
         role="slider"
-        aria-label="Seek and loop region. Drag to select loop."
+        aria-label="Seek bar. Drag to scrub; select loops on the time bar above."
         aria-valuemin={0}
         aria-valuemax={duration || 0}
         aria-valuenow={currentTime}
@@ -536,9 +575,6 @@ export function WaveformSeekBar({
         </div>
       )}
 
-      <p className="waveform-hint">
-        Click = seek · Drag = loop · Long-press = marker · Shift+←/→ = ±5s
-      </p>
     </div>
   );
 }
