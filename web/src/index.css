@@ -1,0 +1,84 @@
+:root {
+  color-scheme: dark;
+  --bg: #0c0e12;
+  --bg-elevated: #141820;
+  --bg-hover: #1a2030;
+  --bg-active: #1e2a3d;
+  --border: #252b38;
+  --border-strong: #343c4e;
+  --text: #e8ecf4;
+  --text-muted: #8b95a8;
+  --text-faint: #5c6678;
+  --accent: #5eead4;
+  --accent-dim: rgba(94, 234, 212, 0.12);
+  --accent-strong: #2dd4bf;
+  --sc: #ff5500;
+  --sc-soft: rgba(255, 85, 0, 0.22);
+  --sc-dim: rgba(255, 85, 0, 0.12);
+  --loop: #fbbf24;
+  --loop-soft: rgba(251, 191, 36, 0.18);
+  --danger: #f87171;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --font: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --sidebar-w: 300px;
+  --player-h: 220px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+}
+
+a {
+  color: var(--accent);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}

@@ -1,0 +1,207 @@
+import { useEffect, useMemo, useState } from "react";
+import { SongList } from "./components/SongList";
+import { LyricsPanel } from "./components/LyricsPanel";
+import { PlayerBar } from "./components/PlayerBar";
+import { nextPlaybackMode, useAudioPlayer } from "./hooks/useAudioPlayer";
+import { useMarkers } from "./hooks/useMarkers";
+import { useLyrics, useSongs } from "./hooks/useSongs";
+import "./App.css";
+
+export default function App() {
+  const { songs, loading, error } = useSongs();
+  const player = useAudioPlayer(songs);
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return songs;
+    return songs.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.artist.toLowerCase().includes(q) ||
+        s.slug.toLowerCase().includes(q),
+    );
+  }, [songs, query]);
+
+  const lyrics = useLyrics(player.current?.slug ?? null);
+  const markerState = useMarkers(player.current?.slug ?? null);
+
+  // Practice keyboard shortcuts (stable callbacks + latest state via refs)
+  const loop = player.loop;
+  const loopEnabled = player.loopEnabled;
+  const playbackRate = player.playbackRate;
+  const playbackMode = player.playbackMode;
+  const {
+    toggle,
+    skip,
+    setLoopIn,
+    setLoopOut,
+    setLoopEnabled,
+    toggleMute,
+    setPlaybackRate,
+    setPlaybackMode,
+    clearLoop,
+  } = player;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+
+      switch (e.key) {
+        case " ":
+          e.preventDefault();
+          void toggle();
+          break;
+        case "ArrowLeft":
+          if (!e.metaKey && !e.ctrlKey) {
+            e.preventDefault();
+            skip(e.shiftKey ? -5 : -1);
+          }
+          break;
+        case "ArrowRight":
+          if (!e.metaKey && !e.ctrlKey) {
+            e.preventDefault();
+            skip(e.shiftKey ? 5 : 1);
+          }
+          break;
+        case "i":
+        case "I":
+          setLoopIn();
+          break;
+        case "o":
+        case "O":
+          setLoopOut();
+          break;
+        case "l":
+        case "L":
+          if (loop) setLoopEnabled(!loopEnabled);
+          break;
+        case "r":
+        case "R":
+          setPlaybackMode(nextPlaybackMode(playbackMode));
+          break;
+        case "m":
+        case "M":
+          toggleMute();
+          break;
+        case "[":
+          setPlaybackRate(Math.max(0.5, playbackRate - 0.05));
+          break;
+        case "]":
+          setPlaybackRate(Math.min(1.5, playbackRate + 0.05));
+          break;
+        case "Escape":
+          clearLoop();
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    toggle,
+    skip,
+    setLoopIn,
+    setLoopOut,
+    setLoopEnabled,
+    toggleMute,
+    setPlaybackRate,
+    setPlaybackMode,
+    clearLoop,
+    loop,
+    loopEnabled,
+    playbackRate,
+    playbackMode,
+  ]);
+
+  if (loading) {
+    return (
+      <div className="boot">
+        <div className="boot-card">Loading songs…</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="boot">
+        <div className="boot-card error">
+          <strong>Could not load songs</strong>
+          <p>{error}</p>
+          <p className="hint">
+            Expected folder: <code>../songs/&#123;slug&#125;/</code>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app">
+      <div className="app-body">
+        <SongList
+          songs={filtered}
+          currentSlug={player.current?.slug ?? null}
+          playing={player.playing}
+          query={query}
+          onQueryChange={setQuery}
+          onSelect={(song) => void player.playSong(song)}
+        />
+        <LyricsPanel
+          song={player.current}
+          markdown={lyrics.markdown}
+          loading={lyrics.loading}
+          error={lyrics.error}
+          markers={markerState.markers}
+          stanzaTags={markerState.stanzaTags}
+          currentTime={player.currentTime}
+          onSeek={player.seek}
+          onMarkerUpdate={markerState.updateMarker}
+          onStanzaTagAdd={markerState.addStanzaTag}
+          onStanzaTagRemove={markerState.removeStanzaTag}
+        />
+      </div>
+      <PlayerBar
+        song={player.current}
+        playing={player.playing}
+        currentTime={player.currentTime}
+        duration={player.duration}
+        volume={player.volume}
+        muted={player.muted}
+        playbackRate={player.playbackRate}
+        loop={player.loop}
+        loopEnabled={player.loopEnabled}
+        buffered={player.buffered}
+        playbackMode={player.playbackMode}
+        markers={markerState.markers}
+        onMarkerAdd={markerState.addMarker}
+        onMarkerUpdate={markerState.updateMarker}
+        onMarkerRemove={markerState.removeMarker}
+        onToggle={() => void player.toggle()}
+        onPrev={player.playPrev}
+        onNext={player.playNext}
+        onPlaybackMode={player.setPlaybackMode}
+        onSeek={player.seek}
+        onSkip={player.skip}
+        onVolume={player.setVolume}
+        onToggleMute={player.toggleMute}
+        onRate={player.setPlaybackRate}
+        onLoopChange={player.setLoop}
+        onLoopEnable={player.setLoopEnabled}
+        onLoopIn={player.setLoopIn}
+        onLoopOut={player.setLoopOut}
+        onClearLoop={player.clearLoop}
+      />
+    </div>
+  );
+}

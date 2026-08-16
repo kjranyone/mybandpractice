@@ -1,0 +1,28 @@
+# Lyrics Fetcher & Media Pipeline Configuration Example
+# Copy this file to config.yaml to customize settings.
+
+lyrics_fetcher:
+  polite_delay_seconds: 1.5
+  timeout_seconds: 20
+
+  primary_provider:
+    search_url: "https://www.uta-net.com/search/"
+    search_params:
+      Aselect: "2"
+      Bselect: "3"
+    song_url_pattern: "https://www.uta-net.com/song/{id}/"
+    selectors:
+      search_row: "table.songlist-table tbody tr"
+      search_link_regex: "/song/(\\d+)/"
+      search_title: ".songlist-title"
+      search_artist: "td a[href^='/artist/']"
+      body: "#kashi_area"
+      title: "h2.kashi-title"
+      artist: '[itemprop="byArtist name"], a[itemprop="byArtist"]'
+      lyricist: 'a[itemprop="lyricist"]'
+      composer: 'a[itemprop="composer"]'
+      arranger: 'a[itemprop="arranger"]'
+
+  fallback_provider:
+    url_pattern: "https://genius.com/{artist}-{title}-lyrics"
+    container_selector: "[data-lyrics-container]"
