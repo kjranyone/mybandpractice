@@ -15,6 +15,7 @@ export default function App() {
   const { songs, loading, error } = useSongs();
   const setlistState = useSetlists();
   const [query, setQuery] = useState("");
+  const [listOpen, setListOpen] = useState(false);
   const [mode, setMode] = useState<string | null>(() =>
     localStorage.getItem(MODE_KEY),
   );
@@ -177,6 +178,15 @@ export default function App() {
 
   return (
     <div className="app">
+      <button
+        type="button"
+        className={`songlist-toggle${listOpen ? " is-open" : ""}`}
+        onClick={() => setListOpen((v) => !v)}
+        aria-label={listOpen ? "Close song list" : "Open song list"}
+        aria-expanded={listOpen}
+      >
+        {listOpen ? "✕" : "☰"}
+      </button>
       <div className="app-body">
         <SongList
           songs={songs}
@@ -185,7 +195,10 @@ export default function App() {
           playing={player.playing}
           query={query}
           onQueryChange={setQuery}
-          onSelect={(song) => void player.playSong(song)}
+          onSelect={(song) => {
+            void player.playSong(song);
+            setListOpen(false);
+          }}
           mode={effectiveMode}
           onModeChange={setMode}
           setlists={setlistState.setlists}
@@ -194,6 +207,7 @@ export default function App() {
           onSaveSetlist={(sl) => void setlistState.save(sl)}
           onRemoveSetlist={(id) => void setlistState.remove(id)}
           onCreate={setlistState.create}
+          mobileOpen={listOpen}
         />
         <LyricsPanel
           song={player.current}

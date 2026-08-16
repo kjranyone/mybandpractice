@@ -20,6 +20,7 @@ type Props = {
   onSaveSetlist: (setlist: Setlist) => void;
   onRemoveSetlist: (id: string) => void;
   onCreate: (name: string) => Setlist;
+  mobileOpen: boolean;
 };
 
 export function SongList({
@@ -38,6 +39,7 @@ export function SongList({
   onSaveSetlist,
   onRemoveSetlist,
   onCreate,
+  mobileOpen,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -95,7 +97,7 @@ export function SongList({
   };
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${mobileOpen ? " is-open" : ""}`}>
       <div className="sidebar-header">
         <div className="mode-selector" ref={menuRef}>
           <button

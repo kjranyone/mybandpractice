@@ -32,8 +32,10 @@
   transition: background 0.12s;
 }
 
-.mode-button:hover {
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .mode-button:hover {
+    background: var(--bg-hover);
+  }
 }
 
 .mode-text {
@@ -84,9 +86,11 @@
   text-align: left;
 }
 
-.mode-item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+@media (hover: hover) {
+  .mode-item:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
 }
 
 .mode-item.is-active {
@@ -120,13 +124,15 @@
   place-items: center;
 }
 
-.mode-item-row:hover .mode-item-del {
-  color: var(--text-faint);
-}
+@media (hover: hover) {
+  .mode-item-row:hover .mode-item-del {
+    color: var(--text-faint);
+  }
 
-.mode-item-del:hover {
-  color: #f87171;
-  background: rgba(248, 113, 113, 0.12);
+  .mode-item-del:hover {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.12);
+  }
 }
 
 .mode-menu-footer {
@@ -225,8 +231,10 @@
   transition: background 0.12s;
 }
 
-.song-row:hover {
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .song-row:hover {
+    background: var(--bg-hover);
+  }
 }
 
 .song-row.is-active {
@@ -294,8 +302,10 @@
   gap: 0.15rem;
 }
 
-.song-row-li:hover .song-row-tools {
-  display: inline-flex;
+@media (hover: hover) {
+  .song-row-li:hover .song-row-tools {
+    display: inline-flex;
+  }
 }
 
 .song-row-tools button {
@@ -311,9 +321,11 @@
   place-items: center;
 }
 
-.song-row-tools button:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--sc);
+@media (hover: hover) {
+  .song-row-tools button:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--sc);
+  }
 }
 
 .song-row-tools button:disabled {
@@ -336,9 +348,11 @@
   text-align: left;
 }
 
-.setlist-add-toggle:hover {
-  color: var(--text);
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .setlist-add-toggle:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
 }
 
 .modal-overlay {
@@ -394,9 +408,11 @@
   place-items: center;
 }
 
-.modal-close:hover {
-  color: var(--text);
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .modal-close:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
 }
 
 .modal-search input {
@@ -427,8 +443,10 @@
   text-align: left;
 }
 
-.modal-song-list button:hover {
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .modal-song-list button:hover {
+    background: var(--bg-hover);
+  }
 }
 
 .modal-song-list .song-title {
@@ -554,8 +572,10 @@
   border-color: rgba(94, 234, 212, 0.3);
 }
 
-.chip-link:hover {
-  background: var(--accent-dim);
+@media (hover: hover) {
+  .chip-link:hover {
+    background: var(--accent-dim);
+  }
 }
 
 /* Section markers linked to lyrics stanzas */
@@ -589,21 +609,39 @@
   transition: opacity 0.12s, color 0.12s, border-color 0.12s;
 }
 
-.stanza-markers:hover .stanza-add,
 .stanza-markers.has-chips .stanza-add,
 .stanza-add.is-open,
 .stanza-markers:focus-within .stanza-add {
   opacity: 1;
 }
 
-.stanza-add:hover {
-  color: var(--sc);
-  border-color: var(--sc);
+@media (hover: hover) {
+  .stanza-markers:hover .stanza-add {
+    opacity: 1;
+  }
+
+  .stanza-add:hover {
+    color: var(--sc);
+    border-color: var(--sc);
+  }
 }
 
 @media (hover: none) {
   .stanza-add {
     opacity: 1;
+  }
+
+  /* reveal hover-only tools on touch devices */
+  .song-row-li .song-row-tools {
+    display: inline-flex;
+  }
+
+  .chip-wrap .chip-x {
+    display: grid;
+  }
+
+  .mode-item-row .mode-item-del {
+    color: var(--text-faint);
   }
 }
 
@@ -623,9 +661,17 @@
   transition: color 0.12s, border-color 0.12s, background 0.12s;
 }
 
-.marker-chip:hover {
-  color: var(--text);
-  border-color: var(--sc);
+@media (hover: hover) {
+  .marker-chip:hover {
+    color: var(--text);
+    border-color: var(--sc);
+  }
+
+  .marker-chip.is-jump:hover {
+    color: #06202a;
+    background: var(--accent);
+    border-color: var(--accent);
+  }
 }
 
 .marker-chip.is-plain {
@@ -637,12 +683,6 @@
   color: var(--accent);
   border-color: rgba(94, 234, 212, 0.45);
   background: rgba(94, 234, 212, 0.08);
-}
-
-.marker-chip.is-jump:hover {
-  color: #06202a;
-  background: var(--accent);
-  border-color: var(--accent);
 }
 
 .chip-wrap.is-active .marker-chip {
@@ -665,12 +705,14 @@
   place-items: center;
 }
 
-.chip-wrap:hover .chip-x {
-  display: grid;
-}
+@media (hover: hover) {
+  .chip-wrap:hover .chip-x {
+    display: grid;
+  }
 
-.chip-x:hover {
-  color: #f87171;
+  .chip-x:hover {
+    color: #f87171;
+  }
 }
 
 .stanza-popover {
@@ -840,9 +882,11 @@
   z-index: 3;
 }
 
-.wf-marker-flag:hover {
-  border-color: var(--sc);
-  color: #fff;
+@media (hover: hover) {
+  .wf-marker-flag:hover {
+    border-color: var(--sc);
+    color: #fff;
+  }
 }
 
 .wf-marker-flag.is-row2 {
@@ -882,9 +926,11 @@
   transition: color 0.12s, border-color 0.12s, background 0.12s;
 }
 
-.wf-me-tag:hover {
-  color: var(--text);
-  border-color: var(--sc);
+@media (hover: hover) {
+  .wf-me-tag:hover {
+    color: var(--text);
+    border-color: var(--sc);
+  }
 }
 
 .wf-me-tag.is-active {
@@ -936,14 +982,16 @@
   transition: color 0.12s, border-color 0.12s;
 }
 
-.wf-me-btn:hover {
-  color: var(--text);
-  border-color: var(--sc);
-}
+@media (hover: hover) {
+  .wf-me-btn:hover {
+    color: var(--text);
+    border-color: var(--sc);
+  }
 
-.wf-me-btn.danger:hover {
-  color: #f87171;
-  border-color: #f87171;
+  .wf-me-btn.danger:hover {
+    color: #f87171;
+    border-color: #f87171;
+  }
 }
 
 .waveform-times {
@@ -1171,13 +1219,19 @@
 /* Deck row */
 .player-deck {
   display: grid;
-  grid-template-columns: minmax(120px, 1.1fr) minmax(280px, 2.2fr) minmax(160px, 1.1fr) 72px;
-  gap: 0.85rem 1rem;
+  grid-template-columns:
+    minmax(120px, 1.1fr) minmax(280px, 2.2fr) minmax(160px, 1.1fr) 72px;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "info transport speed vol"
+    "info loop      speed vol";
+  gap: 0.5rem 1rem;
   align-items: center;
   min-width: 0;
 }
 
 .player-info {
+  grid-area: info;
   min-width: 0;
 }
 
@@ -1197,15 +1251,9 @@
   text-overflow: ellipsis;
 }
 
-.player-transport-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.45rem;
-  min-width: 0;
-}
-
 .transport {
+  grid-area: transport;
+  justify-self: center;
   display: flex;
   align-items: center;
   gap: 0.25rem;
@@ -1268,9 +1316,11 @@
   border: 0;
 }
 
-.icon-btn:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--bg-hover);
+@media (hover: hover) {
+  .icon-btn:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
 }
 
 .icon-btn:disabled,
@@ -1292,14 +1342,18 @@
   transition: transform 0.12s, background 0.12s;
 }
 
-.play-btn:hover:not(:disabled) {
-  background: var(--sc);
-  color: #fff;
-  transform: scale(1.04);
+@media (hover: hover) {
+  .play-btn:hover:not(:disabled) {
+    background: var(--sc);
+    color: #fff;
+    transform: scale(1.04);
+  }
 }
 
 /* DAW loop strip */
 .loop-strip {
+  grid-area: loop;
+  justify-self: center;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1329,9 +1383,11 @@
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-.loop-btn:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--text-faint);
+@media (hover: hover) {
+  .loop-btn:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--text-faint);
+  }
 }
 
 .loop-btn.is-active {
@@ -1355,15 +1411,24 @@
 .loop-readout {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 0.3rem;
   font-size: 0.68rem;
   margin-left: 0.25rem;
   color: var(--text-muted);
   min-height: 1.2rem;
+  /* fixed width (mono font): "0:00.0 → 0:00.0 (0:00.0)" worst case
+     so readout changes never reflow/wrap the loop strip */
+  width: 16.5ch;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 /* Speed */
 .speed-control {
+  grid-area: speed;
+  align-self: center;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -1417,9 +1482,11 @@
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-.speed-chip:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--text-faint);
+@media (hover: hover) {
+  .speed-chip:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--text-faint);
+  }
 }
 
 .speed-chip.is-active {
@@ -1458,6 +1525,7 @@
 
 /* Vertical volume fader */
 .vol-fader {
+  grid-area: vol;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1485,8 +1553,10 @@
   font-family: var(--mono);
 }
 
-.vol-mute:hover {
-  color: var(--text);
+@media (hover: hover) {
+  .vol-mute:hover {
+    color: var(--text);
+  }
 }
 
 .vol-mute.is-muted {
@@ -1617,44 +1687,92 @@
 
 @media (max-width: 960px) {
   .player-deck {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: auto auto 1fr 64px;
+    grid-template-rows: auto auto;
     grid-template-areas:
-      "info vol"
-      "transport transport"
-      "speed speed";
+      "info info info vol"
+      "transport loop speed vol";
   }
 
-  .player-info {
-    grid-area: info;
+  /* Compact transport: hide prev/next and ±1s/±5s seek
+     (track skip lives in the media notification; precise seeks
+     can be done by tapping/dragging the waveform) */
+  .transport .track-btn,
+  .transport .skip-btn {
+    display: none;
   }
 
-  .player-transport-block {
-    grid-area: transport;
+  /* Compact loop strip: hide the text readout (the loop region is
+     visible on the waveform itself) so buttons stay on one line */
+  .loop-strip {
+    flex-wrap: nowrap;
+  }
+
+  .loop-readout {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .player-deck {
+    grid-template-columns: 1fr 64px;
+    grid-template-rows: auto auto auto;
+    grid-template-areas:
+      "info info"
+      "transport vol"
+      "loop vol"
+      "speed vol";
   }
 
   .speed-control {
-    grid-area: speed;
+    justify-self: stretch;
   }
+}
 
-  .vol-fader {
-    grid-area: vol;
-    min-height: 80px;
-  }
+/* Mobile: song list becomes a fullscreen modal (opened via hamburger) */
+.songlist-toggle {
+  display: none;
 }
 
 @media (max-width: 820px) {
   .app-body {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(180px, 32vh) 1fr;
+    grid-template-rows: 1fr;
+  }
+
+  .songlist-toggle {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    top: 0.75rem;
+    left: 0.75rem;
+    z-index: 51; /* above the fullscreen songlist modal */
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    border: 1px solid var(--border-strong);
+    background: rgba(10, 12, 16, 0.92);
+    color: var(--text);
+    font-size: 1.25rem;
+    line-height: 1;
   }
 
   .sidebar {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+    display: none;
+  }
+
+  .sidebar.is-open {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    border: none;
+    background: rgba(10, 12, 16, 0.985);
+    padding-top: 4.25rem; /* keep room for the toggle/close button */
   }
 
   .main {
-    padding: 1.25rem 1.25rem 2rem;
+    padding: 4rem 1.25rem 2rem;
   }
 
   .waveform {
