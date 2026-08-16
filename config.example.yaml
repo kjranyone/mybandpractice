@@ -1,16 +1,18 @@
 # Lyrics Fetcher & Media Pipeline Configuration Example
-# Copy this file to config.yaml to customize settings.
+# Copy this file to config.yaml and fill in your own providers.
+# The URLs below are placeholders — replace them with the actual
+# endpoints you are allowed to use.
 
 lyrics_fetcher:
   polite_delay_seconds: 1.5
   timeout_seconds: 20
 
   primary_provider:
-    search_url: "https://www.uta-net.com/search/"
+    search_url: "https://example.com/search/"
     search_params:
       Aselect: "2"
       Bselect: "3"
-    song_url_pattern: "https://www.uta-net.com/song/{id}/"
+    song_url_pattern: "https://example.com/song/{id}/"
     selectors:
       search_row: "table.songlist-table tbody tr"
       search_link_regex: "/song/(\\d+)/"
@@ -24,5 +26,5 @@ lyrics_fetcher:
       arranger: 'a[itemprop="arranger"]'
 
   fallback_provider:
-    url_pattern: "https://genius.com/{artist}-{title}-lyrics"
+    url_pattern: "https://example.com/{artist}-{title}-lyrics"
     container_selector: "[data-lyrics-container]"
