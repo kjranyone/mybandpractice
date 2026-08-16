@@ -102,6 +102,26 @@ python bin/fetch-lyrics.py
 python bin/fetch-lyrics.py <song-slug>
 ```
 
+### 5. Android 実機へのデプロイ (`sync.ps1`)
+
+APK ビルド & インストール、および `songs/`・`setlists/` の端末への同期を行います。
+
+```powershell
+# 対話モード: app / songs / both を選択 (Enter で both)
+./bin/sync.ps1
+
+# アプリの更新のみ (端末の音源はそのまま)
+./bin/sync.ps1 -AppOnly
+
+# songs/ と setlists/ の再転送のみ (再ビルドなし)
+./bin/sync.ps1 -SongsOnly
+
+# 複数端末接続時にシリアルを指定
+./bin/sync.ps1 -Serial <device-serial>
+```
+
+事前に USB デバッグ有効な端末の接続と、`adb` (Android platform-tools) が必要です。音源は端末の `Android/data/com.donoy.mybandpractice/files/` 以下に配置されます。
+
 ---
 
 ## ⚠️ ツールおよびデータ利用に関する免責事項・注意事項 (Disclaimer)

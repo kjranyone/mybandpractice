@@ -6,7 +6,7 @@
     /storage/emulated/0/Android/data/<pkg>/files/songs/
 
 .EXAMPLE
-  ./bin/sync.ps1                # build APK, install, push songs
+  ./bin/sync.ps1                # interactive: pick app / songs / both
   ./bin/sync.ps1 -Serial XYZ    # choose a specific device
   ./bin/sync.ps1 -AppOnly       # app update only (keep songs on device)
   ./bin/sync.ps1 -SongsOnly     # re-push songs only (no rebuild)
@@ -99,7 +99,33 @@ function Sync-Songs {
   }
 }
 
-if (-not $SongsOnly) { Install-App }
-if (-not $AppOnly) { Sync-Songs }
+function Select-Mode {
+  $modes = @(
+    @{ App = $true;  Songs = $true;  Label = "both  : app install + songs/setlists sync" },
+    @{ App = $true;  Songs = $false; Label = "app   : build & install APK only" },
+    @{ App = $false; Songs = $true;  Label = "songs : push songs/ + setlists/ only" }
+  )
+  Write-Host "Select sync mode:" -ForegroundColor Cyan
+  for ($i = 0; $i -lt $modes.Count; $i++) {
+    Write-Host ("  [{0}] {1}" -f ($i + 1), $modes[$i].Label)
+  }
+  while ($true) {
+    $answer = (Read-Host "Choice [1-3, Enter=1]").Trim()
+    if ($answer -eq "") { return $modes[0] }
+    if ($answer -match '^[123]$') { return $modes[[int]$answer - 1] }
+    Write-Host "Invalid input. Enter 1-3." -ForegroundColor Yellow
+  }
+}
+
+if ($AppOnly) {
+  $mode = @{ App = $true;  Songs = $false }
+} elseif ($SongsOnly) {
+  $mode = @{ App = $false; Songs = $true }
+} else {
+  $mode = Select-Mode
+}
+
+if ($mode.App) { Install-App }
+if ($mode.Songs) { Sync-Songs }
 
 Write-Host "`nDone. Launch 'My Band Practice' on the tablet." -ForegroundColor Green
