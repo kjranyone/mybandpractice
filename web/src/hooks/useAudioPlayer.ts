@@ -196,6 +196,18 @@ export function useAudioPlayer(songs: SongSummary[]) {
     }
   }, []);
 
+  const play = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !currentRef.current) return;
+    void audio.play().catch(() => {
+      /* ignore */
+    });
+  }, []);
+
+  const pause = useCallback(() => {
+    audioRef.current?.pause();
+  }, []);
+
   const seek = useCallback((time: number) => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -345,6 +357,8 @@ export function useAudioPlayer(songs: SongSummary[]) {
     playbackMode,
     playSong,
     toggle,
+    play,
+    pause,
     seek,
     skip,
     setVolume,

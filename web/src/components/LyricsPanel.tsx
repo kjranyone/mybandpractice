@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   MARKER_PRESETS,
   type SongMarker,
@@ -53,6 +53,16 @@ export function LyricsPanel({
     x: number;
     y: number;
   } | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!popover) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!popoverRef.current?.contains(e.target as Node)) setPopover(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [popover]);
 
   const blocks = useMemo(() => {
     if (!markdown) return [];
@@ -297,6 +307,7 @@ export function LyricsPanel({
 
       {popover && (
         <div
+          ref={popoverRef}
           className="stanza-popover"
           style={{
             left: `min(${popover.x}px, calc(100vw - 23rem))`,

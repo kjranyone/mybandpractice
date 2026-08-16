@@ -4,6 +4,7 @@ import { LyricsPanel } from "./components/LyricsPanel";
 import { PlayerBar } from "./components/PlayerBar";
 import { nextPlaybackMode, useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMarkers } from "./hooks/useMarkers";
+import { useMediaSession } from "./hooks/useMediaSession";
 import { useLyrics, useSongs } from "./hooks/useSongs";
 import { useSetlists } from "./hooks/useSetlists";
 import "./App.css";
@@ -38,6 +39,7 @@ export default function App() {
   }, [songs, activeSetlist]);
 
   const player = useAudioPlayer(playlistSongs);
+  useMediaSession(player);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
