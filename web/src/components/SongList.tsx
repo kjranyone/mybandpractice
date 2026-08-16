@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Setlist } from "../hooks/useSetlists";
 import type { SongSummary } from "../types";
 import { formatDuration } from "../utils/format";
@@ -41,7 +42,8 @@ export function SongList({
   const [menuOpen, setMenuOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addQuery, setAddQuery] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -55,6 +57,17 @@ export function SongList({
 
   const inSet = new Set(activeSetlist?.songs ?? []);
   const addable = songs.filter((s) => !inSet.has(s.slug));
+
+  const addableFiltered = (() => {
+    const q = addQuery.trim().toLowerCase();
+    if (!q) return addable;
+    return addable.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.artist.toLowerCase().includes(q) ||
+        s.slug.toLowerCase().includes(q),
+    );
+  })();
 
   const mutate = (songsNext: string[]) => {
     if (activeSetlist) onSaveSetlist({ ...activeSetlist, songs: songsNext });
@@ -288,30 +301,88 @@ export function SongList({
           <button
             type="button"
             className="setlist-add-toggle"
-            onClick={() => setAdding((v) => !v)}
+            onClick={() => {
+              setAddQuery("");
+              setAddOpen(true);
+            }}
           >
-            {adding ? "▾" : "▸"} Add songs ({addable.length})
+            ＋ Add songs ({addable.length})
           </button>
-          {adding && (
-            <ul className="setlist-add-list">
-              {addable.map((s) => (
-                <li key={s.slug}>
-                  <button
-                    type="button"
-                    onClick={() => mutate([...activeSetlist.songs, s.slug])}
-                  >
-                    <span className="song-title">{s.title}</span>
-                    <span className="song-artist">{s.artist}</span>
-                    <span className="add-plus" aria-hidden>
-                      ＋
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       )}
+
+      {addOpen &&
+        activeSetlist &&
+        createPortal(
+          <div
+            className="modal-overlay"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setAddOpen(false);
+            }}
+          >
+            <div
+              className="modal-card"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Add songs to setlist"
+            >
+              <div className="modal-head">
+                <p className="modal-title">
+                  Add songs
+                  <span className="modal-sub"> · {activeSetlist.name}</span>
+                </p>
+                <button
+                  type="button"
+                  className="modal-close"
+                  aria-label="Close"
+                  onClick={() => setAddOpen(false)}
+                >
+                  ✕
+                </button>
+              </div>
+              <label className="search modal-search">
+                <span className="sr-only">Search songs</span>
+                <input
+                  type="search"
+                  autoFocus
+                  placeholder="Search title or artist…"
+                  value={addQuery}
+                  onChange={(e) => setAddQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setAddOpen(false);
+                  }}
+                />
+              </label>
+              <ul className="modal-song-list">
+                {addableFiltered.map((s) => (
+                  <li key={s.slug}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        mutate([...activeSetlist.songs, s.slug])
+                      }
+                    >
+                      <span className="song-meta">
+                        <span className="song-title">{s.title}</span>
+                        <span className="song-artist">{s.artist}</span>
+                      </span>
+                      <span className="add-plus" aria-hidden>
+                        ＋
+                      </span>
+                    </button>
+                  </li>
+                ))}
+                {addableFiltered.length === 0 && (
+                  <li className="empty-list">No matching songs</li>
+                )}
+              </ul>
+              <p className="popover-hint modal-hint">
+                Tap a song to add it — the dialog stays open for multiple adds.
+              </p>
+            </div>
+          </div>,
+          document.body,
+        )}
     </aside>
   );
 }

@@ -321,7 +321,7 @@
   cursor: not-allowed;
 }
 
-/* Add-songs panel at the sidebar bottom */
+/* Add-songs footer + modal */
 .setlist-add {
   border-top: 1px solid var(--border);
   padding: 0.5rem;
@@ -341,43 +341,116 @@
   background: var(--bg-hover);
 }
 
-.setlist-add-list {
-  list-style: none;
-  margin: 0.35rem 0 0;
-  padding: 0;
-  max-height: 40vh;
-  overflow-y: auto;
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(4, 6, 10, 0.65);
+  backdrop-filter: blur(4px);
 }
 
-.setlist-add-list button {
+.modal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(56rem, calc(100vw - 3rem));
+  height: min(42rem, calc(100vh - 3rem));
+  padding: 1rem;
+  border-radius: 10px;
+  background: rgba(10, 12, 16, 0.98);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.modal-sub {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.modal-close {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  display: grid;
+  place-items: center;
+}
+
+.modal-close:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.modal-search input {
+  width: 100%;
+  font-size: 0.95rem;
+  padding: 0.55rem 0.7rem;
+}
+
+.modal-song-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  align-content: start;
+  gap: 2px;
+}
+
+.modal-song-list button {
   width: 100%;
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 0.15rem 0.5rem;
-  padding: 0.45rem 0.5rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.6rem;
   border-radius: 7px;
   text-align: left;
 }
 
-.setlist-add-list button:hover {
+.modal-song-list button:hover {
   background: var(--bg-hover);
 }
 
-.setlist-add-list .song-title {
-  grid-column: 1;
-  font-size: 0.82rem;
-}
-
-.setlist-add-list .song-artist {
-  grid-column: 1;
-}
-
-.setlist-add-list .add-plus {
-  grid-row: 1 / span 2;
-  grid-column: 2;
-  align-self: center;
-  color: var(--accent);
+.modal-song-list .song-title {
   font-size: 0.85rem;
+}
+
+.modal-song-list .song-artist {
+  display: block;
+  color: var(--text-muted);
+}
+
+.modal-song-list .add-plus {
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.modal-song-list .empty-list {
+  grid-column: 1 / -1;
+}
+
+.modal-hint {
+  padding: 0 0.1rem;
 }
 
 /* EQ bars */
