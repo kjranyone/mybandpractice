@@ -7,7 +7,10 @@ config.local.yaml
 *.local
 
 # Media & Audio Content
-songs/
+songs/*
+!songs/.gitkeep
+setlists/*
+!setlists/.gitkeep
 *.mp3
 *.wav
 *.m4a
