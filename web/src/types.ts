@@ -4,6 +4,10 @@ export type SongSummary = {
   artist: string;
   durationSeconds: number | null;
   audioUrl: string | null;
+  /** available separated stems, e.g. ["vocals","drums","bass","other"] */
+  stems?: string[];
+  /** base URL for stem files; `${stemBaseUrl}${stem}.mp3` resolves audio */
+  stemBaseUrl?: string;
   hasLyrics: boolean;
   sourceUrl?: string;
   lyricist?: string;

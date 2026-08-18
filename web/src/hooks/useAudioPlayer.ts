@@ -27,6 +27,16 @@ export const PLAYBACK_MODE_LABELS: Record<PlaybackMode, string> = {
 
 export type AudioPlayer = ReturnType<typeof useAudioPlayer>;
 
+export type StemName = "mix" | "vocals" | "drums" | "bass" | "other";
+
+/** stem files: `${stemBaseUrl}${stem}.mp3` */
+function stemUrl(song: SongSummary, stem: string): string | null {
+  if (song.stemBaseUrl && song.stems?.includes(stem)) {
+    return `${song.stemBaseUrl}${encodeURIComponent(stem)}.mp3`;
+  }
+  return null;
+}
+
 const MIN_LOOP = 0.25; // seconds
 const RATE_PRESETS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5] as const;
 
@@ -52,6 +62,14 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const [buffered, setBuffered] = useState(0); // 0–1 fraction
   const [playbackMode, setPlaybackModeState] =
     useState<PlaybackMode>("sequential");
+  /** per-stem enable flags; missing/true = enabled. ALL enabled => the
+   * original mix file plays; any disabled => enabled stems are summed
+   * live via Web Audio (minus-one). */
+  const [stemEnabled, setStemEnabledState] = useState<Record<string, boolean>>(
+    {},
+  );
+  const stemEnabledRef = useRef<Record<string, boolean>>({});
+  stemEnabledRef.current = stemEnabled;
 
   const loopRef = useRef<LoopRegion | null>(null);
   const loopEnabledRef = useRef(false);
@@ -60,36 +78,165 @@ export function useAudioPlayer(songs: SongSummary[]) {
   loopEnabledRef.current = loopEnabled;
   playbackModeRef.current = playbackMode;
 
-  const playSong = useCallback(async (song: SongSummary) => {
-    const audio = audioRef.current;
-    if (!audio || !song.audioUrl) return;
+  // --- Web Audio stem graph (lazily created on first stem toggle) ---
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const stemGraphRef = useRef<{
+    mix: GainNode; // master mix element route (kept forever once created)
+    stems: Map<string, { el: HTMLAudioElement; gain: GainNode }>;
+  } | null>(null);
+  const stemGraphSlugRef = useRef<string | null>(null);
 
-    if (currentRef.current?.slug === song.slug && audio.src) {
+  const stemsAllOn = (
+    song: SongSummary | null,
+    enabled: Record<string, boolean>,
+  ) => !song?.stems || song.stems.every((s) => enabled[s] !== false);
+
+  const teardownStems = useCallback(() => {
+    const g = stemGraphRef.current;
+    if (!g) return;
+    for (const { el, gain } of g.stems.values()) {
+      el.pause();
+      el.removeAttribute("src");
+      gain.disconnect();
+    }
+    g.stems.clear();
+    stemGraphSlugRef.current = null;
+  }, []);
+
+  const ensureStemGraph = useCallback((song: SongSummary) => {
+    if (!song.stems || !song.stemBaseUrl) return null;
+    const audio = audioRef.current;
+    if (!audio) return null;
+    let ctx = audioCtxRef.current;
+    if (!ctx) {
+      const AC: typeof AudioContext =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      ctx = new AC();
+      audioCtxRef.current = ctx;
+    }
+    if (!stemGraphRef.current) {
+      // Route the master mix element through the context once. Note:
+      // MediaElementSource permanently reroutes the element, so this
+      // chain stays alive for the rest of the session.
+      const mixGain = ctx.createGain();
+      ctx.createMediaElementSource(audio).connect(mixGain);
+      mixGain.connect(ctx.destination);
+      stemGraphRef.current = { mix: mixGain, stems: new Map() };
+    }
+    const g = stemGraphRef.current;
+    if (stemGraphSlugRef.current !== song.slug) {
+      for (const { el, gain } of g.stems.values()) {
+        el.pause();
+        el.removeAttribute("src");
+        gain.disconnect();
+      }
+      g.stems.clear();
+      stemGraphSlugRef.current = song.slug;
+    }
+    for (const s of song.stems) {
+      if (g.stems.has(s)) continue;
+      const el = new Audio();
+      el.preload = "auto";
+      el.preservesPitch = true;
+      el.volume = audio.volume;
+      const url = stemUrl(song, s);
+      if (!url) continue;
+      el.src = url;
+      const gain = ctx.createGain();
+      gain.gain.value = 0; // starts silent
+      ctx.createMediaElementSource(el).connect(gain);
+      gain.connect(ctx.destination);
+      g.stems.set(s, { el, gain });
+    }
+    void ctx.resume();
+    return g;
+  }, []);
+
+  const applyStemGains = useCallback(
+    (song: SongSummary | null, enabled: Record<string, boolean>) => {
+      const g = stemGraphRef.current;
+      const ctx = audioCtxRef.current;
+      if (!g || !ctx) return;
+      const allOn = stemsAllOn(song, enabled);
+      const t = ctx.currentTime;
+      const ramp = (node: GainNode, v: number) => {
+        node.gain.cancelScheduledValues(t);
+        node.gain.setValueAtTime(node.gain.value, t);
+        node.gain.linearRampToValueAtTime(v, t + 0.03);
+      };
+      ramp(g.mix, allOn ? 1 : 0);
+      for (const [name, { gain }] of g.stems) {
+        ramp(gain, allOn ? 0 : enabled[name] !== false ? 1 : 0);
+      }
+    },
+    [],
+  );
+
+  /** Keep stem elements in sync with the master mix element. */
+  const syncStemPlayback = useCallback(() => {
+    const g = stemGraphRef.current;
+    const audio = audioRef.current;
+    if (!g || !audio) return;
+    const t = audio.currentTime;
+    const wantPlay = !audio.paused && !audio.ended;
+    for (const { el } of g.stems.values()) {
+      if (el.readyState > 0 && Math.abs(el.currentTime - t) > 0.15) {
+        el.currentTime = t;
+      }
+      if (wantPlay && el.paused) void el.play().catch(() => {});
+      if (!wantPlay && !el.paused) el.pause();
+    }
+  }, []);
+
+  const syncStemPlaybackRef = useRef(syncStemPlayback);
+  syncStemPlaybackRef.current = syncStemPlayback;
+
+  const playSong = useCallback(
+    async (song: SongSummary) => {
+      const audio = audioRef.current;
+      if (!audio || !song.audioUrl) return;
+
+      const cur = currentRef.current;
+      if (cur?.slug === song.slug && audio.src) {
+        try {
+          await audio.play();
+        } catch {
+          setPlaying(false);
+        }
+        return;
+      }
+
+      // New track: clear loop selection
+      setLoopState(null);
+      setLoopEnabledState(false);
+      loopRef.current = null;
+      loopEnabledRef.current = false;
+
+      setCurrent(song);
+      setCurrentTime(0);
+      setBuffered(0);
+      audio.src = song.audioUrl; // always the mix; stems layer on top
+      audio.load();
+
+      // Rebuild the stem layer for the new song (keeps minus-one state)
+      if (song.stems?.length) {
+        ensureStemGraph(song);
+      } else {
+        teardownStems();
+      }
+      applyStemGains(song, stemEnabledRef.current);
+
       try {
         await audio.play();
       } catch {
         setPlaying(false);
       }
-      return;
-    }
-
-    // New track: clear loop selection
-    setLoopState(null);
-    setLoopEnabledState(false);
-    loopRef.current = null;
-    loopEnabledRef.current = false;
-
-    setCurrent(song);
-    setCurrentTime(0);
-    setBuffered(0);
-    audio.src = song.audioUrl;
-    audio.load();
-    try {
-      await audio.play();
-    } catch {
-      setPlaying(false);
-    }
-  }, []);
+      syncStemPlaybackRef.current();
+    },
+    [applyStemGains, ensureStemGraph, teardownStems],
+  );
 
   const playSongRef = useRef(playSong);
   playSongRef.current = playSong;
@@ -109,6 +256,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
         // Small epsilon so we don't thrash at the boundary
         if (t >= lp.end - 0.02) {
           audio.currentTime = lp.start;
+          syncStemPlaybackRef.current();
           setCurrentTime(lp.start);
           return;
         }
@@ -121,8 +269,14 @@ export function useAudioPlayer(songs: SongSummary[]) {
     };
 
     const onMeta = () => setDuration(audio.duration || 0);
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
+    const onPlay = () => {
+      setPlaying(true);
+      syncStemPlaybackRef.current();
+    };
+    const onPause = () => {
+      setPlaying(false);
+      syncStemPlaybackRef.current();
+    };
     const onProgress = () => {
       try {
         if (audio.buffered.length > 0 && audio.duration > 0) {
@@ -141,6 +295,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
         return;
       }
       setPlaying(false);
+      syncStemPlaybackRef.current();
       const cur = currentRef.current;
       if (!cur) return;
       if (playbackModeRef.current === "repeat-one") {
@@ -167,8 +322,29 @@ export function useAudioPlayer(songs: SongSummary[]) {
     audio.addEventListener("progress", onProgress);
     audio.addEventListener("canplay", onProgress);
 
+    // timeupdate fires ~4Hz which is too coarse for the precise m:ss.d
+    // readout — poll via rAF while playing (loop snapping included).
+    let raf = 0;
+    const tick = () => {
+      onTime();
+      raf = requestAnimationFrame(tick);
+    };
+    const startRaf = () => {
+      if (!raf) raf = requestAnimationFrame(tick);
+    };
+    const stopRaf = () => {
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+    };
+    audio.addEventListener("play", startRaf);
+    audio.addEventListener("pause", stopRaf);
+    audio.addEventListener("ended", stopRaf);
+
     return () => {
       audio.pause();
+      stopRaf();
       audio.removeEventListener("timeupdate", onTime);
       audio.removeEventListener("loadedmetadata", onMeta);
       audio.removeEventListener("durationchange", onMeta);
@@ -177,6 +353,15 @@ export function useAudioPlayer(songs: SongSummary[]) {
       audio.removeEventListener("ended", onEnded);
       audio.removeEventListener("progress", onProgress);
       audio.removeEventListener("canplay", onProgress);
+      audio.removeEventListener("play", startRaf);
+      audio.removeEventListener("pause", stopRaf);
+      audio.removeEventListener("ended", stopRaf);
+      for (const { el } of stemGraphRef.current?.stems.values() ?? []) {
+        el.pause();
+      }
+      void audioCtxRef.current?.close();
+      audioCtxRef.current = null;
+      stemGraphRef.current = null;
       audio.src = "";
       audioRef.current = null;
     };
@@ -199,23 +384,61 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const play = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !currentRef.current) return;
+    void audioCtxRef.current?.resume();
     void audio.play().catch(() => {
       /* ignore */
     });
-  }, []);
+    syncStemPlayback();
+  }, [syncStemPlayback]);
 
   const pause = useCallback(() => {
     audioRef.current?.pause();
-  }, []);
+    syncStemPlayback();
+  }, [syncStemPlayback]);
 
-  const seek = useCallback((time: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const dur = audio.duration || duration || 0;
-    const t = clamp(time, 0, dur || time);
-    audio.currentTime = t;
-    setCurrentTime(t);
-  }, [duration]);
+  /** Toggle one stem off/on. All-on plays the original mix; any stem
+   * disabled switches to live-summed remaining stems (minus-one). */
+  const toggleStem = useCallback(
+    (name: string) => {
+      const song = currentRef.current;
+      const audio = audioRef.current;
+      if (!song?.stems?.includes(name) || !audio) return;
+      const cur = stemEnabledRef.current;
+      const next = { ...cur, [name]: cur[name] !== false ? false : true };
+      setStemEnabledState(next);
+      stemEnabledRef.current = next;
+      if (!stemsAllOn(song, next)) {
+        ensureStemGraph(song);
+        syncStemPlayback();
+      }
+      applyStemGains(song, next);
+    },
+    [applyStemGains, ensureStemGraph, syncStemPlayback],
+  );
+
+  /** Re-enable every stem (back to the original mix). */
+  const enableAllStems = useCallback(() => {
+    const song = currentRef.current;
+    if (!song?.stems) return;
+    const next: Record<string, boolean> = {};
+    for (const s of song.stems) next[s] = true;
+    setStemEnabledState(next);
+    stemEnabledRef.current = next;
+    applyStemGains(song, next);
+  }, [applyStemGains]);
+
+  const seek = useCallback(
+    (time: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const dur = audio.duration || duration || 0;
+      const t = clamp(time, 0, dur || time);
+      audio.currentTime = t;
+      setCurrentTime(t);
+      syncStemPlayback();
+    },
+    [duration, syncStemPlayback],
+  );
 
   const skip = useCallback(
     (delta: number) => {
@@ -229,18 +452,25 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const setVolume = useCallback((v: number) => {
     const clamped = clamp(v, 0, 1);
     setVolumeState(clamped);
-    if (audioRef.current) {
-      audioRef.current.volume = clamped;
-      if (clamped > 0 && audioRef.current.muted) {
-        audioRef.current.muted = false;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.volume = clamped;
+      if (clamped > 0 && audio.muted) {
+        audio.muted = false;
         setMutedState(false);
       }
+    }
+    for (const { el } of stemGraphRef.current?.stems.values() ?? []) {
+      el.volume = clamped;
     }
   }, []);
 
   const setMuted = useCallback((m: boolean) => {
     setMutedState(m);
     if (audioRef.current) audioRef.current.muted = m;
+    for (const { el } of stemGraphRef.current?.stems.values() ?? []) {
+      el.muted = m;
+    }
   }, []);
 
   const toggleMute = useCallback(() => {
@@ -250,9 +480,14 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const setPlaybackRate = useCallback((rate: number) => {
     const r = clamp(rate, 0.25, 2);
     setPlaybackRateState(r);
-    if (audioRef.current) {
-      audioRef.current.playbackRate = r;
-      audioRef.current.preservesPitch = true;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.playbackRate = r;
+      audio.preservesPitch = true;
+    }
+    for (const { el } of stemGraphRef.current?.stems.values() ?? []) {
+      el.playbackRate = r;
+      el.preservesPitch = true;
     }
   }, []);
 
@@ -355,10 +590,13 @@ export function useAudioPlayer(songs: SongSummary[]) {
     loopEnabled,
     buffered,
     playbackMode,
+    stemEnabled,
     playSong,
     toggle,
     play,
     pause,
+    toggleStem,
+    enableAllStems,
     seek,
     skip,
     setVolume,

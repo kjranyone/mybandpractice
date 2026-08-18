@@ -95,6 +95,29 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
     const duration =
       meta.audio?.output_duration_seconds ?? meta.yt_duration_seconds ?? null;
 
+    // Separated stems (bin/separate-stems.py) live in stems/<stem>.mp3
+    let stems: string[] | undefined;
+    try {
+      const stemDir = await Filesystem.readdir({
+        path: `${dirPath}/stems`,
+        directory: Directory.External,
+      });
+      const found = stemDir.files
+        .map((f) => f.name ?? "")
+        .filter(
+          (f) =>
+            f.toLowerCase().endsWith(".mp3") &&
+            !["mix.mp3", "mixdown.mp3", "original.mp3"].includes(
+              f.toLowerCase(),
+            ),
+        )
+        .map((f) => f.slice(0, -".mp3".length))
+        .sort();
+      if (found.length > 0) stems = found;
+    } catch {
+      /* no stems dir */
+    }
+
     songs.push({
       slug,
       title: meta.title || slug,
@@ -106,6 +129,11 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
               `${toAbs(entry.uri)}/${encodeURIComponent(mp3.name)}`,
             )
           : null,
+      stems,
+      stemBaseUrl:
+        stems && entry.uri
+          ? `${Capacitor.convertFileSrc(toAbs(entry.uri))}/stems/`
+          : undefined,
       hasLyrics: files.some((f) => f.name === "lyrics.md"),
       sourceUrl: meta.source_url,
       lyricist: meta.lyrics?.lyricist || undefined,

@@ -235,6 +235,9 @@ export default function App() {
         loopEnabled={player.loopEnabled}
         buffered={player.buffered}
         playbackMode={player.playbackMode}
+        stemEnabled={player.stemEnabled}
+        onStemToggle={player.toggleStem}
+        onStemAll={player.enableAllStems}
         markers={markerState.markers}
         onMarkerAdd={markerState.addMarker}
         onMarkerUpdate={markerState.updateMarker}
