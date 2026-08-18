@@ -190,6 +190,11 @@ uv run python bin/separate-stems.py <song-slug> --single bs_roformer_4stem --dev
 > - **Intel Arc (XPU)**: 安定性保護のため自動選択されませんので、`--device xpu --batch-size 1` を明示指定して実行してください。大幅に処理時間が短縮されます。
 > - **tools/msst** は初回実行時に自動クローンされるため手動準備は不要です。
 
+> [!WARNING]
+> **Intel Arc (XPU) 推論時の注意 (システムクラッシュ・フリーズ防止)**:
+> - **実行中の強制中断の禁止**: Intel Arc (oneAPI Level-Zero) での GPU 推論計算中にプロセスを外部から強制終了 (タスクキル / SIGKILL) すると、グラフィックスドライバのデッドロックにより Windows がブルースクリーン (BSoD) または再起動することがあります。推論実行中は途中で強制中断せず完了まで待機してください。
+> - **バッチサイズ**: VRAM 枯渇によるフリーズを防ぐため、XPU 推論時は必ず `--batch-size 1` (既定) で実行してください。
+
 #### オプション
 
 | オプション | 既定 | 説明 |
