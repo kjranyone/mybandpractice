@@ -34,6 +34,7 @@ export function VolumeFader({
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (disabled) return;
+    e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     setFromClientY(e.clientY);
   };

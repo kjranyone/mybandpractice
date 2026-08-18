@@ -362,15 +362,14 @@ export function PlayerBar({
                       {" "}
                       — drag faders to blend (all up = original mix)
                     </span>
-                    {!allStemsOn && (
-                      <button
-                        type="button"
-                        className="stem-all-btn"
-                        onClick={onStemReset}
-                      >
-                        Reset
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className={`stem-all-btn${allStemsOn ? " is-hidden" : ""}`}
+                      onClick={onStemReset}
+                      disabled={allStemsOn}
+                    >
+                      Reset
+                    </button>
                   </p>
                   <div className="mx-fader-bank">
                     {stems.map((s) => (

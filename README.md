@@ -168,29 +168,27 @@ uv run python bin/yt-to-mp3.py "https://www.youtube.com/watch?v=XXXXX" -y --stem
 #### 使い方
 
 ```bash
-# セットアップ (初回のみ)
-git clone --depth 1 https://github.com/ZFTurbo/Music-Source-Separation-Training.git tools/msst
-
-# 特定の曲をアンサンブル分離
+# 特定の曲をアンサンブル分離 (CUDA GPU)
 uv run python bin/separate-stems.py <song-slug>
 
+# Intel Arc (XPU) GPU で高速実行 (推奨: --device xpu --batch-size 1)
+uv run python bin/separate-stems.py <song-slug> --device xpu --batch-size 1
+
 # ステム未生成の全曲を処理
-uv run python bin/separate-stems.py --all
+uv run python bin/separate-stems.py --all --device xpu --batch-size 1
 
 # 既存ステムを再生成
-uv run python bin/separate-stems.py <song-slug> --force
+uv run python bin/separate-stems.py <song-slug> --force --device xpu --batch-size 1
 
 # 単一モデルで高速に実行 (アンサンブルをスキップ)
-uv run python bin/separate-stems.py <song-slug> --single bs_roformer_4stem
-
-# 合成アルゴリズムの変更
-uv run python bin/separate-stems.py <song-slug> --type max_fft
-
-# デバイス指定: cuda / xpu (Intel Arc) / cpu
-# 注意: XPU は自動選択されません (システムが不安定になる場合があるため)。
-# 使用する際は --device xpu --batch-size 1 を推奨。
-uv run python bin/separate-stems.py <song-slug> --device xpu --batch-size 1
+uv run python bin/separate-stems.py <song-slug> --single bs_roformer_4stem --device xpu
 ```
+
+> [!TIP]
+> **GPU 加速の積極利用を推奨**: CPU での推論は数分〜数十分かかります。
+> - **NVIDIA / AMD (ROCm)**: 自動で `cuda` が選択されます。
+> - **Intel Arc (XPU)**: 安定性保護のため自動選択されませんので、`--device xpu --batch-size 1` を明示指定して実行してください。大幅に処理時間が短縮されます。
+> - **tools/msst** は初回実行時に自動クローンされるため手動準備は不要です。
 
 #### オプション
 

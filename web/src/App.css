@@ -1667,6 +1667,13 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  transition: opacity 0.15s ease;
+}
+
+.stem-all-btn.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
 }
 
 /* Speed */

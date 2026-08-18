@@ -78,11 +78,29 @@ export function WaveformSeekBar({
     null,
   );
   const [markerEditor, setMarkerEditor] = useState<MarkerEditor | null>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const longPressRef = useRef<{ timer: number; x: number } | null>(null);
   const flagDragRef = useRef<{ id: string; x: number; moved: boolean } | null>(
     null,
   );
   const flagLongPressRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!markerEditor) return;
+    const handleOutsideClick = (e: PointerEvent) => {
+      if (editorRef.current && !editorRef.current.contains(e.target as Node)) {
+        setMarkerEditor(null);
+      }
+    };
+    // Use setTimeout so the current pointerdown event doesn't trigger immediate close
+    const timer = setTimeout(() => {
+      window.addEventListener("pointerdown", handleOutsideClick);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("pointerdown", handleOutsideClick);
+    };
+  }, [markerEditor]);
 
   const clearLongPress = useCallback(() => {
     if (longPressRef.current) {
@@ -361,7 +379,17 @@ export function WaveformSeekBar({
         onPointerMove={onTimeBarPointerMove}
         onPointerUp={onTimeBarPointerUp}
         onPointerCancel={onTimeBarPointerUp}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          if (disabled || !duration) return;
+          const ratio = clientXToRatio(e.clientX);
+          const t = ratioToTime(ratio);
+          setMarkerEditor({
+            markerId: null,
+            time: t,
+            label: suggestMarkerLabel(markers.length),
+          });
+        }}
       >
         {/* Loop selection track */}
         <div className="loop-strip-line" aria-hidden />
@@ -398,7 +426,17 @@ export function WaveformSeekBar({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onPointerLeave={onPointerLeave}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          if (disabled || !duration) return;
+          const ratio = clientXToRatio(e.clientX);
+          const t = ratioToTime(ratio);
+          setMarkerEditor({
+            markerId: null,
+            time: t,
+            label: suggestMarkerLabel(markers.length),
+          });
+        }}
         onKeyDown={(e) => {
           if (disabled) return;
           if (e.key === "ArrowLeft") {
@@ -515,6 +553,7 @@ export function WaveformSeekBar({
 
       {markerEditor && (
         <div
+          ref={editorRef}
           className="wf-marker-editor"
           style={{
             left: `${clamp(markerEditor.time / (duration || 1), 0.06, 0.94) * 100}%`,
