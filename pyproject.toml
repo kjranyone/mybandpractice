@@ -1,0 +1,44 @@
+[project]
+name = "mybandpractice"
+version = "0.1.0"
+description = "Band practice audio pipeline: download, normalize, lyrics, stem separation"
+requires-python = ">=3.12"
+dependencies = [
+    # yt-to-mp3.py
+    "pykakasi",
+    # fetch-lyrics.py
+    "pyyaml",
+    "requests",
+    "beautifulsoup4",
+    "lxml",
+    # stem separation (Music-Source-Separation-Training inference)
+    "librosa",
+    "soundfile",
+    "numpy",
+    "tqdm",
+    "ml-collections",
+    "torch==2.11.0+xpu",
+    "torchaudio==2.11.0+xpu",
+    "triton-xpu==3.7.0",
+    "einops>=0.8.2",
+    "beartype>=0.22.9",
+    "omegaconf>=2.3.1",
+    "loralib>=0.1.2",
+    "rotary-embedding-torch>=0.9.1",
+]
+
+[dependency-groups]
+dev = []
+
+[tool.uv]
+# Intel Arc (XPU) wheels for torch/torchaudio
+environments = ["sys_platform == 'win32'"]
+[[tool.uv.index]]
+name = "pytorch-xpu"
+url = "https://download.pytorch.org/whl/xpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-xpu" }
+torchaudio = { index = "pytorch-xpu" }
+triton-xpu = { index = "pytorch-xpu" }

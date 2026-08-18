@@ -11,8 +11,15 @@ Pipeline stages
 
 Usage
 -----
-    python bin/yt-to-mp3.py <youtube-url>
-    python bin/yt-to-mp3.py            # prompts for URL
+    python bin/yt-to-mp3.py <youtube-url>            # interactive
+    python bin/yt-to-mp3.py                          # prompts for URL
+    python bin/yt-to-mp3.py <url> -y                 # non-interactive
+    python bin/yt-to-mp3.py <url> -y --stems         # + 4-stem separation
+    python bin/yt-to-mp3.py "ytsearch1:artist song"  # search query
+
+Options: --name (slug override), --target-i / --target-tp / --target-lra
+(loudnorm targets), --silence-db / --keep-silence (trimming), --bitrate,
+--sample-rate.
 """
 
 from __future__ import annotations
@@ -515,6 +522,12 @@ def main() -> None:
         help="non-interactive: auto-accept slug, overwrite existing dir",
     )
     ap.add_argument(
+        "--stems",
+        action="store_true",
+        help="separate 4-stem vocals/drums/bass/other after download "
+        "(requires uv env: uv run python bin/yt-to-mp3.py ...)",
+    )
+    ap.add_argument(
         "--name",
         default=None,
         help="override the song directory name (slug)",
@@ -565,7 +578,7 @@ def main() -> None:
     SONGS_DIR.mkdir(parents=True, exist_ok=True)
 
     url = args.url or prompt_url()
-    process(
+    song_dir = process(
         url=url,
         target_i=args.target_i,
         target_tp=args.target_tp,
@@ -577,6 +590,15 @@ def main() -> None:
         assume_yes=args.yes,
         name_override=args.name,
     )
+
+    if args.stems:
+        print("\n==> stem separation (--stems)")
+        rc = subprocess.run(
+            [sys.executable, str(ROOT / "bin" / "separate-stems.py"), song_dir.name],
+            env=UTF8_ENV,
+        ).returncode
+        if rc != 0:
+            print("warning: stem separation failed (song was saved anyway)")
 
 
 if __name__ == "__main__":

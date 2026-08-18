@@ -29,6 +29,8 @@ export type SongSummary = {
   artist: string;
   durationSeconds: number | null;
   audioUrl: string | null;
+  stems?: string[];
+  stemBaseUrl?: string;
   hasLyrics: boolean;
   sourceUrl?: string;
   lyricist?: string;
@@ -71,6 +73,24 @@ function listSongs(songsDir: string): SongSummary[] {
     const duration =
       meta.audio?.output_duration_seconds ?? meta.yt_duration_seconds ?? null;
 
+    // Separated stems (bin/separate-stems.py) live in stems/<stem>.mp3
+    let stems: string[] | undefined;
+    const stemsDir = path.join(dir, "stems");
+    if (fs.existsSync(stemsDir)) {
+      const found = fs
+        .readdirSync(stemsDir)
+        .filter(
+          (f) =>
+            f.toLowerCase().endsWith(".mp3") &&
+            !["mix", "mixdown", "original"].includes(
+              f.slice(0, -".mp3".length).toLowerCase(),
+            ),
+        )
+        .map((f) => f.slice(0, -".mp3".length))
+        .sort();
+      if (found.length > 0) stems = found;
+    }
+
     songs.push({
       slug,
       title: meta.title || slug,
@@ -79,6 +99,10 @@ function listSongs(songsDir: string): SongSummary[] {
       audioUrl: mp3
         ? `/songs/${encodeURIComponent(slug)}/${encodeURIComponent(mp3)}`
         : null,
+      stems,
+      stemBaseUrl: stems
+        ? `/songs/${encodeURIComponent(slug)}/stems/`
+        : undefined,
       hasLyrics: files.includes("lyrics.md"),
       sourceUrl: meta.source_url,
       lyricist: meta.lyrics?.lyricist || undefined,

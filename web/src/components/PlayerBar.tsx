@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { createPortal } from "react-dom";
 import type { LoopRegion } from "../hooks/useAudioPlayer";
 import {
   PLAYBACK_MODE_LABELS,
@@ -23,6 +25,9 @@ type Props = {
   loopEnabled: boolean;
   buffered: number;
   playbackMode: PlaybackMode;
+  stemEnabled: Record<string, boolean>;
+  onStemToggle: (name: string) => void;
+  onStemAll: () => void;
   markers: SongMarker[];
   onMarkerAdd: (time: number, label: string) => void;
   onMarkerUpdate: (
@@ -58,6 +63,9 @@ export function PlayerBar({
   loopEnabled,
   buffered,
   playbackMode,
+  stemEnabled,
+  onStemToggle,
+  onStemAll,
   markers,
   onMarkerAdd,
   onMarkerUpdate,
@@ -80,6 +88,15 @@ export function PlayerBar({
   const disabled = !song?.audioUrl;
   const loopLen = loop ? loop.end - loop.start : 0;
   const modeLabel = PLAYBACK_MODE_LABELS[playbackMode];
+  const [mixerOpen, setMixerOpen] = useState(false);
+  const stems = song?.stems ?? [];
+  const allStemsOn = stems.every((s) => stemEnabled[s] !== false);
+  const offStems = stems.filter((s) => stemEnabled[s] === false);
+  const stemChipLabel = allStemsOn
+    ? "mix"
+    : offStems.length === 1
+      ? `-${offStems[0]}`
+      : `${stems.length - offStems.length}/${stems.length}`;
 
   return (
     <footer className="player practice-player">
@@ -102,7 +119,7 @@ export function PlayerBar({
         onMarkerRemove={onMarkerRemove}
       />
 
-      {/* Row 2: transport + practice tools */}
+      {/* Row 2: transport + loop + mixer entry */}
       <div className="player-deck">
         <div className="player-info">
           {song ? (
@@ -257,20 +274,145 @@ export function PlayerBar({
           </div>
         </div>
 
-        <SpeedControl
-          rate={playbackRate}
-          disabled={disabled}
-          onChange={onRate}
-        />
-
-        <VolumeFader
-          volume={volume}
-          muted={muted}
-          disabled={!song}
-          onVolume={onVolume}
-          onToggleMute={onToggleMute}
-        />
+        <button
+          type="button"
+          className={`mixer-toggle mono${mixerOpen ? " is-active" : ""}`}
+          onClick={() => setMixerOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={mixerOpen}
+          aria-label="Open mixer"
+          title={`Mixer — speed ${playbackRate.toFixed(2)}×, ${
+            allStemsOn ? "original mix" : `minus-one (${offStems.join(", ")} muted)`
+          }, volume ${Math.round((muted ? 0 : volume) * 100)}%`}
+        >
+          <span
+            className={`mx-stat${Math.abs(playbackRate - 1) >= 0.005 ? " is-on" : ""}`}
+          >
+            {playbackRate.toFixed(2).replace(/\.?0+$/, "")}×
+          </span>
+          <span className="mx-sep" aria-hidden>
+            ·
+          </span>
+          <span
+            className={`mx-stat${!allStemsOn ? " is-on is-stem" : ""}`}
+            title={
+              allStemsOn
+                ? "Original mix"
+                : `Minus-one: ${offStems.join(", ")} muted`
+            }
+          >
+            {stemChipLabel}
+          </span>
+          <span className="mx-sep" aria-hidden>
+            ·
+          </span>
+          <span
+            className="mx-vol"
+            role="img"
+            aria-label={
+              muted || volume === 0
+                ? "muted"
+                : `volume ${Math.round(volume * 100)}%`
+            }
+          >
+            <span
+              className="mx-vol-fill"
+              style={{ width: `${Math.round((muted ? 0 : volume) * 100)}%` }}
+            />
+            <span className="mx-vol-text">
+              {muted || volume === 0 ? "M" : `${Math.round(volume * 100)}`}
+            </span>
+          </span>
+        </button>
       </div>
+
+      {mixerOpen &&
+        createPortal(
+          <div
+            className="modal-overlay"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setMixerOpen(false);
+            }}
+          >
+            <div
+              className="modal-card mixer-card"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Mixer"
+            >
+              <div className="modal-head">
+                <p className="modal-title">Mixer</p>
+                <button
+                  type="button"
+                  className="modal-close"
+                  aria-label="Close mixer"
+                  onClick={() => setMixerOpen(false)}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {stems.length > 0 && (
+                <section className="mixer-section">
+                  <p className="mixer-section-title">
+                    Stems
+                    <span className="mixer-section-hint">
+                      {" "}
+                      — uncheck to mute (minus-one)
+                    </span>
+                    {!allStemsOn && (
+                      <button
+                        type="button"
+                        className="stem-all-btn"
+                        onClick={onStemAll}
+                      >
+                        All
+                      </button>
+                    )}
+                  </p>
+                  <div className="stem-checks">
+                    {stems.map((s) => (
+                      <label
+                        key={s}
+                        className={`stem-check mono${stemEnabled[s] === false ? "" : " is-on"}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={stemEnabled[s] !== false}
+                          disabled={disabled}
+                          onChange={() => onStemToggle(s)}
+                        />
+                        <span>{s}</span>
+                      </label>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <div className="mixer-row">
+                <section className="mixer-section mixer-speed">
+                  <SpeedControl
+                    rate={playbackRate}
+                    disabled={disabled}
+                    onChange={onRate}
+                  />
+                </section>
+                <section className="mixer-section mixer-volume">
+                  <p className="mixer-section-title">Volume</p>
+                  <VolumeFader
+                    volume={volume}
+                    muted={muted}
+                    disabled={!song}
+                    onVolume={onVolume}
+                    onToggleMute={onToggleMute}
+                  />
+                </section>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
       <span className="sr-only" aria-live="polite">
         {modeLabel}
       </span>

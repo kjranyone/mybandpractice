@@ -820,13 +820,11 @@
   color: var(--text-muted);
 }
 
-/* —— Practice player —— */
-.player.practice-player {
+/* —— Practice player —— */.player.practice-player {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
   height: auto;
-  min-height: var(--player-h);
   padding: 0.65rem 1.1rem 0.75rem;
   border-top: 1px solid var(--border);
   background:
@@ -1219,12 +1217,8 @@
 /* Deck row */
 .player-deck {
   display: grid;
-  grid-template-columns:
-    minmax(120px, 1.1fr) minmax(280px, 2.2fr) minmax(160px, 1.1fr) 72px;
-  grid-template-rows: auto 1fr;
-  grid-template-areas:
-    "info transport speed vol"
-    "info loop      speed vol";
+  grid-template-columns: minmax(120px, 1fr) auto auto auto;
+  grid-template-areas: "info transport loop mix";
   gap: 0.5rem 1rem;
   align-items: center;
   min-width: 0;
@@ -1425,10 +1419,182 @@
   overflow: hidden;
 }
 
+/* Mixer status chip + floating modal (opened from the player deck) */
+.mixer-toggle {
+  grid-area: mix;
+  height: 38px;
+  padding: 0 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+@media (hover: hover) {
+  .mixer-toggle:hover {
+    color: var(--text);
+    border-color: var(--text-faint);
+  }
+}
+
+.mixer-toggle.is-active {
+  color: var(--text);
+  border-color: var(--loop);
+}
+
+.mx-stat {
+  line-height: 1;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.mx-stat.is-on {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.mx-stat.is-on.is-stem {
+  color: var(--loop);
+  text-transform: capitalize;
+}
+
+.mx-sep {
+  color: var(--text-faint);
+  opacity: 0.6;
+}
+
+/* power-indicator style volume segment: fill grows with volume */
+.mx-vol {
+  position: relative;
+  min-width: 3em;
+  height: 1.25em;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mx-vol-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  opacity: 0.55;
+  transition: width 0.15s ease-out;
+}
+
+.mx-vol-text {
+  position: relative;
+  z-index: 1;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.mixer-card {
+  width: min(30rem, calc(100vw - 2rem));
+  height: auto;
+  max-height: calc(100vh - 2rem);
+}
+
+.mixer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.mixer-section-title {
+  margin: 0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.mixer-row {
+  display: flex;
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+.mixer-row .mixer-speed {
+  flex: 1;
+}
+
+.mixer-row .mixer-volume {
+  align-items: center;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.mixer-row .vol-fader {
+  min-height: 150px;
+}
+
+/* Stem checkboxes (inside the mixer modal) */
+.stem-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+}
+
+.stem-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  cursor: pointer;
+  text-transform: capitalize;
+  user-select: none;
+}
+
+.stem-check.is-on {
+  color: var(--text);
+}
+
+.stem-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--loop);
+  cursor: pointer;
+}
+
+.mixer-section-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
+}
+
+.stem-all-btn {
+  margin-left: 0.5rem;
+  padding: 1px 0.6rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--loop);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 /* Speed */
 .speed-control {
-  grid-area: speed;
-  align-self: center;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -1525,7 +1691,6 @@
 
 /* Vertical volume fader */
 .vol-fader {
-  grid-area: vol;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1687,11 +1852,10 @@
 
 @media (max-width: 960px) {
   .player-deck {
-    grid-template-columns: auto auto 1fr 64px;
-    grid-template-rows: auto auto;
+    grid-template-columns: auto 1fr auto;
     grid-template-areas:
-      "info info info vol"
-      "transport loop speed vol";
+      "info info info"
+      "transport loop mix";
   }
 
   /* Compact transport: hide prev/next and ±1s/±5s seek
@@ -1706,26 +1870,45 @@
      visible on the waveform itself) so buttons stay on one line */
   .loop-strip {
     flex-wrap: nowrap;
+    justify-self: center;
   }
 
   .loop-readout {
     display: none;
   }
-}
 
-@media (max-width: 640px) {
-  .player-deck {
-    grid-template-columns: 1fr 64px;
-    grid-template-rows: auto auto auto;
-    grid-template-areas:
-      "info info"
-      "transport vol"
-      "loop vol"
-      "speed vol";
+  /* Mixer modal: stack speed above the volume fader on narrow screens */
+  .mixer-row {
+    flex-direction: column;
   }
 
-  .speed-control {
+  .mixer-row .vol-fader {
+    min-height: 110px;
+  }
+}
+
+/* Phones: transport + mixer chip share the play row, loop strip gets
+ * its own full-width row underneath (393px-class viewports). */
+@media (max-width: 600px) {
+  .player-deck {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "info info info"
+      "transport transport mix"
+      "loop loop loop";
+  }
+
+  .transport {
+    justify-self: start;
+  }
+
+  .loop-strip {
     justify-self: stretch;
+    justify-content: center;
+  }
+
+  .mixer-toggle {
+    justify-self: end;
   }
 }
 
