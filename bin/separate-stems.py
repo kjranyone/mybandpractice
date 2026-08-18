@@ -335,7 +335,12 @@ def main() -> None:
         default=None,
         help="ensemble algorithm: avg_wave (default), median_wave, min_fft, max_fft, ...",
     )
-    ap.add_argument("--device", default=None, help="cuda | xpu | cpu (default: auto, xpu never auto)")
+    ap.add_argument(
+        "--device",
+        default=None,
+        help="cuda (NVIDIA or AMD ROCm via torch cuda API) | xpu (Intel Arc, "
+        "opt-in) | cpu (default: auto)",
+    )
     ap.add_argument("--batch-size", type=int, default=None, help="inference batch size (default: 1 on xpu, 4 otherwise)")
     ap.add_argument("--bitrate", default="192k", help="mp3 bitrate (default 192k)")
     args = ap.parse_args()

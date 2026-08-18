@@ -30,7 +30,7 @@
 - **AI 音源分離**: vocals / drums / bass / other の 4 ステムに自動分離
 - **アンサンブル標準**: 複数モデル (BS-RoFormer + SCNet) の結果を avg_wave で合成し高品質化
 - **取り込み時実行**: `yt-to-mp3.py --stems` でダウンロードと同時に分離
-- **Intel Arc (XPU) 対応**: CUDA / XPU / CPU を選択 (XPU は VRAM ガード付きの明示指定)
+- **マルチ GPU 対応**: NVIDIA CUDA / Intel Arc XPU (VRAM ガード付きの明示指定) / AMD ROCm (Linux では `--device cuda` で動作) / CPU
 
 ### 📱 5. Android デプロイ & 同期 (`bin/sync.ps1`)
 - ADB 経由での Android タブレット/スマホへの APK インストール & `songs/` 音源の自動同期
@@ -78,7 +78,10 @@ mybandpractice/
 git clone https://github.com/kjranyone/mybandpractice.git
 cd mybandpractice
 
-# Python 環境構築 (torch は Intel Arc XPU ビルドを使用)
+# Python 環境構築
+# 注: 本リポジトリの pyproject.toml は Intel Arc (XPU) ビルドの torch に固定しています。
+# NVIDIA / AMD ROCm 環境では pyproject.toml の [tool.uv] セクションを
+# 対応するインデックス (cu128 / rocm) に差し替えてください。
 uv sync
 
 # 設定ファイルを準備 (必要に応じて編集)
@@ -198,7 +201,7 @@ uv run python bin/separate-stems.py <song-slug> --device xpu --batch-size 1
 | `--force` | — | 既存のステムを再生成 |
 | `--single NAME` | — | 指定名のモデルのみで実行 (アンサンブルをスキップ) |
 | `--type ALGO` | `avg_wave` | アンサンブル合成アルゴリズム (`median_wave`, `min_fft`, `max_fft` 等) |
-| `--device` | 自動 | `cuda` / `xpu` / `cpu`。自動は cuda > cpu のみ (xpu は明示指定が必要) |
+| `--device` | 自動 | `cuda` / `xpu` / `cpu`。自動は cuda > cpu のみ (xpu は明示指定が必要)。AMD GPU (ROCm) は Linux では ROCm ビルドの torch が `cuda` API として公開されるため `cuda` 指定で動作 |
 | `--batch-size` | XPU: 1 / 他: 4 | 推論バッチサイズ |
 | `--bitrate` | `192k` | ステム mp3 のビットレート |
 
