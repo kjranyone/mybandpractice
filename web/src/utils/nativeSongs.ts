@@ -47,7 +47,22 @@ function toAbs(uri: string): string {
   return uri.replace(/^file:\/\//, "");
 }
 
+export async function ensureNativePermissions(): Promise<boolean> {
+  if (!isNative()) return true;
+  try {
+    const status = await Filesystem.checkPermissions();
+    if (status.publicStorage !== "granted") {
+      const req = await Filesystem.requestPermissions();
+      return req.publicStorage === "granted";
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function listNativeSongs(): Promise<SongSummary[]> {
+  await ensureNativePermissions();
   let root: ReaddirResult;
   try {
     root = await Filesystem.readdir({
@@ -60,7 +75,8 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
 
   const songs: SongSummary[] = [];
   for (const entry of root.files) {
-    if (entry.type !== "directory") continue;
+    const isDir = entry.type?.toLowerCase() === "directory" || entry.type?.toLowerCase() === "dir";
+    if (!isDir) continue;
     const slug = entry.name;
     const dirPath = `${SONGS_ROOT}/${slug}`;
 
@@ -118,17 +134,18 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
       /* no stems dir */
     }
 
+    const audioUrl = mp3 && entry.uri
+      ? Capacitor.convertFileSrc(
+          `${toAbs(entry.uri)}/${encodeURIComponent(mp3.name)}`,
+        )
+      : null;
+
     songs.push({
       slug,
       title: meta.title || slug,
       artist: meta.artist || "Unknown",
       durationSeconds: duration,
-      audioUrl:
-        mp3 && entry.uri
-          ? Capacitor.convertFileSrc(
-              `${toAbs(entry.uri)}/${encodeURIComponent(mp3.name)}`,
-            )
-          : null,
+      audioUrl,
       stems,
       stemBaseUrl:
         stems && entry.uri

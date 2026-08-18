@@ -25,17 +25,71 @@ $Songs = Join-Path $Root "songs"
 $Pkg = "com.donoy.mybandpractice"
 $DeviceSongsDir = "/storage/emulated/0/Android/data/$Pkg/files/songs"
 
-# --- locate adb -------------------------------------------------------------
+# --- locate adb & android sdk -----------------------------------------------
+$sdk = $env:ANDROID_HOME
+if (-not ($sdk -and (Test-Path $sdk))) {
+  $candidate = Join-Path $env:LOCALAPPDATA "Android/Sdk"
+  if (Test-Path $candidate) { $sdk = $candidate }
+}
+
+if ($sdk) {
+  $env:ANDROID_HOME = $sdk
+  $env:ANDROID_SDK_ROOT = $sdk
+  $localProps = Join-Path $Android "local.properties"
+  if (-not (Test-Path $localProps)) {
+    $sdkDirFormatted = $sdk -replace '\\', '/'
+    Set-Content -Path $localProps -Value "sdk.dir=$sdkDirFormatted"
+  }
+}
+
 $adbExe = (Get-Command adb -ErrorAction SilentlyContinue)?.Source
 if (-not $adbExe) {
-  $sdk = $env:ANDROID_HOME
-  if (-not $sdk) {
-    $candidate = Join-Path $env:LOCALAPPDATA "Android/Sdk"
-    if (Test-Path $candidate) { $sdk = $candidate }
-  }
   $adbExe = if ($sdk) { Join-Path $sdk "platform-tools/adb.exe" } else { $null }
   if (-not ($adbExe -and (Test-Path $adbExe))) {
     throw "adb not found. Install Android platform-tools or set ANDROID_HOME."
+  }
+}
+
+# --- locate java / JAVA_HOME ------------------------------------------------
+function Ensure-JavaHome {
+  if (-not ($env:JAVA_HOME -and (Test-Path $env:JAVA_HOME))) {
+    $foundJava = $null
+    $javaCmd = Get-Command java -ErrorAction SilentlyContinue
+    if ($javaCmd) {
+      try {
+        $output = & java -XshowSettings:properties -version 2>&1
+        $match = $output | Select-String 'java\.home\s*=\s*(.+)'
+        if ($match -and $match.Matches.Count -gt 0) {
+          $foundJava = $match.Matches[0].Groups[1].Value.Trim()
+        }
+      } catch {}
+    }
+    if (-not ($foundJava -and (Test-Path $foundJava))) {
+      $candidates = @(
+        "C:\Program Files\Android\Android Studio\jbr",
+        "C:\Program Files\Android\Android Studio\jre",
+        "$env:LOCALAPPDATA\Android\Sdk\jbr"
+      )
+      $javaDirs = Get-ChildItem "C:\Program Files\Java", "C:\Program Files\Eclipse Adoptium" -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSIsContainer } | Select-Object -ExpandProperty FullName
+      if ($javaDirs) { $candidates += $javaDirs }
+      foreach ($cand in $candidates) {
+        if ($cand -and (Test-Path (Join-Path $cand "bin\java.exe"))) {
+          $foundJava = $cand
+          break
+        }
+      }
+    }
+    if ($foundJava) {
+      $env:JAVA_HOME = $foundJava
+    } else {
+      throw "JAVA_HOME is not set and Java executable was not found. Please install Android Studio or Java JDK, or set JAVA_HOME."
+    }
+  }
+
+  $javaBin = Join-Path $env:JAVA_HOME "bin"
+  if ($env:PATH -notlike "*$javaBin*") {
+    $env:PATH = "$javaBin;$env:PATH"
   }
 }
 
@@ -58,11 +112,7 @@ function Install-App {
     npx cap sync android
     if ($LASTEXITCODE -ne 0) { throw "cap sync failed" }
 
-    if (-not $env:JAVA_HOME) {
-      $javaHome = (& java -XshowSettings:properties -version 2>&1 |
-        Select-String 'java\.home\s*=\s*(.+)').Matches[0].Groups[1].Value
-      if ($javaHome) { $env:JAVA_HOME = $javaHome.Trim() }
-    }
+    Ensure-JavaHome
 
     Write-Host "==> gradlew assembleDebug ..." -ForegroundColor Cyan
     Push-Location $Android
@@ -85,7 +135,15 @@ function Install-App {
 function Sync-Songs {
   if (-not (Test-Path $Songs)) { throw "songs dir not found: $Songs" }
   Write-Host "==> pushing songs/ -> $DeviceSongsDir ..." -ForegroundColor Cyan
+  
+  # Remove existing pushed contents so adb push doesn't fail on fchown/permissions
+  & $adbExe -s $target shell "rm -rf '$DeviceSongsDir' '$DeviceSetlistsDir'"
   & $adbExe -s $target shell "mkdir -p $DeviceSongsDir"
+  
+  Get-ChildItem -Path $Songs -Recurse -Directory | ForEach-Object {
+    $rel = $_.FullName.Substring($Songs.Length).Replace('\', '/')
+    & $adbExe -s $target shell "mkdir -p '$DeviceSongsDir$rel'"
+  }
   & $adbExe -s $target push "$Songs/." $DeviceSongsDir
   if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
 
@@ -94,9 +152,16 @@ function Sync-Songs {
   Write-Host "==> pushing setlists/ -> $DeviceSetlistsDir ..." -ForegroundColor Cyan
   & $adbExe -s $target shell "mkdir -p $DeviceSetlistsDir"
   if (Test-Path $Setlists) {
+    Get-ChildItem -Path $Setlists -Recurse -Directory | ForEach-Object {
+      $rel = $_.FullName.Substring($Setlists.Length).Replace('\', '/')
+      & $adbExe -s $target shell "mkdir -p '$DeviceSetlistsDir$rel'"
+    }
     & $adbExe -s $target push "$Setlists/." $DeviceSetlistsDir
     if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
   }
+
+  Write-Host "==> setting permissions on $DeviceSongsDir ..." -ForegroundColor Cyan
+  & $adbExe -s $target shell "chmod -R 777 '$DeviceSongsDir' '$DeviceSetlistsDir' 2>/dev/null || true"
 }
 
 function Select-Mode {

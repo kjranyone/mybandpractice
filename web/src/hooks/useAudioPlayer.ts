@@ -222,7 +222,11 @@ export function useAudioPlayer(songs: SongSummary[]) {
 
       // Rebuild the stem layer for the new song (keeps minus-one state)
       if (song.stems?.length) {
-        ensureStemGraph(song);
+        try {
+          ensureStemGraph(song);
+        } catch {
+          /* ignore stem graph error */
+        }
       } else {
         teardownStems();
       }
