@@ -238,6 +238,8 @@ export default function App() {
         stemLevels={player.stemLevels}
         onStemLevel={player.setStemLevel}
         onStemReset={player.resetStemLevels}
+        pitch={player.pitch}
+        onPitch={player.setPitch}
         markers={markerState.markers}
         onMarkerAdd={markerState.addMarker}
         onMarkerUpdate={markerState.updateMarker}
