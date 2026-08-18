@@ -228,10 +228,9 @@ def separate_song(
                     )
                 print("      warning: low VRAM — expect slowdowns or failure")
 
-        # Clamp inference batch size: shipped configs target big NVIDIA GPUs.
-        effective_batch = batch_size or (1 if device == "xpu" else 4)
-        if int(config.inference.batch_size) > effective_batch:
-            config.inference.batch_size = effective_batch
+        # Clamp inference batch size if not explicitly provided: shipped configs target big NVIDIA GPUs.
+        effective_batch = batch_size if batch_size is not None else (1 if device == "xpu" else 4)
+        config.inference.batch_size = effective_batch
         print(f"      inference batch_size: {config.inference.batch_size}")
 
         sample_rate = int(getattr(config.audio, "sample_rate", 44100))
@@ -346,10 +345,18 @@ def main() -> None:
     args = ap.parse_args()
 
     if not MSST_DIR.exists():
-        sys.exit(
-            "tools/msst not found. Clone it first:\n"
-            "  git clone --depth 1 "
-            "https://github.com/ZFTurbo/Music-Source-Separation-Training.git tools/msst"
+        print("==> tools/msst not found. Auto-cloning Music-Source-Separation-Training ...")
+        MSST_DIR.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "https://github.com/ZFTurbo/Music-Source-Separation-Training.git",
+                str(MSST_DIR),
+            ],
+            check=True,
         )
 
     if args.all:

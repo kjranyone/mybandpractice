@@ -26,6 +26,7 @@ export function StemFader({ value, label, disabled, onChange }: Props) {
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (disabled) return;
+    e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     setFromClientY(e.clientY);
   };
