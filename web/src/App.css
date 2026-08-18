@@ -1463,6 +1463,10 @@
   text-transform: capitalize;
 }
 
+.mx-stat.is-on.is-pitch {
+  color: #c084fc;
+}
+
 .mx-sep {
   color: var(--text-faint);
   opacity: 0.6;
@@ -1674,6 +1678,38 @@
   opacity: 0;
   pointer-events: none;
   visibility: hidden;
+}
+
+/* Pitch (mixer modal) */
+.mixer-pitch .pitch-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.5rem 0.35rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.pitch-slider {
+  flex: 1;
+}
+
+.pitch-bound {
+  font-size: 0.62rem;
+  color: var(--text-faint);
+}
+
+.pitch-val {
+  min-width: 3.2em;
+  text-align: right;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.pitch-val.is-on {
+  color: #c084fc;
+  font-weight: 700;
 }
 
 /* Speed */

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import type { LoopRegion } from "../hooks/useAudioPlayer";
 import {
@@ -8,7 +8,7 @@ import {
 } from "../hooks/useAudioPlayer";
 import type { SongMarker } from "../hooks/useMarkers";
 import type { SongSummary } from "../types";
-import { formatTimePrecise } from "../utils/format";
+import { clamp, formatTimePrecise } from "../utils/format";
 import { SpeedControl } from "./SpeedControl";
 import { StemFader } from "./StemFader";
 import { VolumeFader } from "./VolumeFader";
@@ -29,6 +29,8 @@ type Props = {
   stemLevels: Record<string, number>;
   onStemLevel: (name: string, level: number) => void;
   onStemReset: () => void;
+  pitch: number;
+  onPitch: (semitones: number) => void;
   markers: SongMarker[];
   onMarkerAdd: (time: number, label: string) => void;
   onMarkerUpdate: (
@@ -67,6 +69,8 @@ export function PlayerBar({
   stemLevels,
   onStemLevel,
   onStemReset,
+  pitch,
+  onPitch,
   markers,
   onMarkerAdd,
   onMarkerUpdate,
@@ -292,6 +296,19 @@ export function PlayerBar({
           >
             {playbackRate.toFixed(2).replace(/\.?0+$/, "")}×
           </span>
+          {pitch !== 0 && (
+            <>
+              <span className="mx-sep" aria-hidden>
+                ·
+              </span>
+              <span
+                className="mx-stat is-on is-pitch"
+                title={`Pitch ${pitch > 0 ? "+" : ""}${pitch} semitones`}
+              >
+                {pitch > 0 ? `+${pitch}` : pitch}st
+              </span>
+            </>
+          )}
           <span className="mx-sep" aria-hidden>
             ·
           </span>
@@ -384,6 +401,50 @@ export function PlayerBar({
                   </div>
                 </section>
               )}
+
+              <section className="mixer-section mixer-pitch">
+                <p className="mixer-section-title">
+                  Pitch
+                  <span className="mixer-section-hint">
+                    {" "}
+                    — semitones, speed unchanged (adds slight latency)
+                  </span>
+                  {pitch !== 0 && (
+                    <button
+                      type="button"
+                      className="stem-all-btn"
+                      onClick={() => onPitch(0)}
+                    >
+                      Reset
+                    </button>
+                  )}
+                </p>
+                <div className="pitch-row">
+                  <span className="mono pitch-bound">−12</span>
+                  <input
+                    type="range"
+                    className="speed-slider pitch-slider"
+                    min={-12}
+                    max={12}
+                    step={1}
+                    value={pitch}
+                    disabled={disabled}
+                    onChange={(e) => onPitch(Number(e.target.value))}
+                    aria-label="Pitch shift (semitones)"
+                    style={
+                      {
+                        "--progress": `${((clamp(pitch, -12, 12) + 12) / 24) * 100}%`,
+                      } as CSSProperties
+                    }
+                  />
+                  <span className="mono pitch-bound">+12</span>
+                  <span
+                    className={`mono pitch-val${pitch !== 0 ? " is-on" : ""}`}
+                  >
+                    {pitch > 0 ? `+${pitch}` : pitch} st
+                  </span>
+                </div>
+              </section>
 
               <div className="mixer-row">
                 <section className="mixer-section mixer-speed">

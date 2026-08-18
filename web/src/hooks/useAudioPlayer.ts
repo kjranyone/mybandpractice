@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPitchNode, registerPitchWorklet } from "../audio/pitchWorklet";
 import type { SongSummary } from "../types";
 import { clamp } from "../utils/format";
 
@@ -71,6 +72,11 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const stemLevelsRef = useRef<Record<string, number>>({});
   stemLevelsRef.current = stemLevels;
 
+  /** Pitch shift in semitones (-12..12). 0 = bypassed (no worklet cost). */
+  const [pitch, setPitchState] = useState(0);
+  const pitchRef = useRef(0);
+  pitchRef.current = pitch;
+
   const loopRef = useRef<LoopRegion | null>(null);
   const loopEnabledRef = useRef(false);
   const playbackModeRef = useRef<PlaybackMode>("sequential");
@@ -78,13 +84,17 @@ export function useAudioPlayer(songs: SongSummary[]) {
   loopEnabledRef.current = loopEnabled;
   playbackModeRef.current = playbackMode;
 
-  // --- Web Audio stem graph (lazily created on first stem toggle) ---
+  // --- Web Audio graph (lazily created for stems and/or pitch) ---
   const audioCtxRef = useRef<AudioContext | null>(null);
   const stemGraphRef = useRef<{
     mix: GainNode; // master mix element route (kept forever once created)
+    pitchIn: GainNode; // all sources sum here, feed the pitch worklet
+    out: GainNode; // post-pitch master
+    worklet: AudioWorkletNode | null;
     stems: Map<string, { el: HTMLAudioElement; gain: GainNode }>;
   } | null>(null);
   const stemGraphSlugRef = useRef<string | null>(null);
+  const graphReadyRef = useRef<Promise<void> | null>(null);
 
   const stemsAllFull = (
     song: SongSummary | null,
@@ -103,10 +113,15 @@ export function useAudioPlayer(songs: SongSummary[]) {
     stemGraphSlugRef.current = null;
   }, []);
 
-  const ensureStemGraph = useCallback((song: SongSummary) => {
-    if (!song.stems || !song.stemBaseUrl) return null;
+  /** Create the AudioContext + shared chain (mix/stems -> pitch -> out).
+   * Safe to call repeatedly; resolves when the worklet is registered. */
+  const ensureGraph = useCallback(async () => {
     const audio = audioRef.current;
     if (!audio) return null;
+    if (stemGraphRef.current) {
+      await graphReadyRef.current;
+      return stemGraphRef.current;
+    }
     let ctx = audioCtxRef.current;
     if (!ctx) {
       const AC: typeof AudioContext =
@@ -116,43 +131,83 @@ export function useAudioPlayer(songs: SongSummary[]) {
       ctx = new AC();
       audioCtxRef.current = ctx;
     }
-    if (!stemGraphRef.current) {
-      // Route the master mix element through the context once. Note:
-      // MediaElementSource permanently reroutes the element, so this
-      // chain stays alive for the rest of the session.
-      const mixGain = ctx.createGain();
-      ctx.createMediaElementSource(audio).connect(mixGain);
-      mixGain.connect(ctx.destination);
-      stemGraphRef.current = { mix: mixGain, stems: new Map() };
-    }
-    const g = stemGraphRef.current;
-    if (stemGraphSlugRef.current !== song.slug) {
-      for (const { el, gain } of g.stems.values()) {
-        el.pause();
-        el.removeAttribute("src");
-        gain.disconnect();
-      }
-      g.stems.clear();
-      stemGraphSlugRef.current = song.slug;
-    }
-    for (const s of song.stems) {
-      if (g.stems.has(s)) continue;
-      const el = new Audio();
-      el.preload = "auto";
-      el.preservesPitch = true;
-      el.volume = audio.volume;
-      const url = stemUrl(song, s);
-      if (!url) continue;
-      el.src = url;
-      const gain = ctx.createGain();
-      gain.gain.value = 0; // starts silent
-      ctx.createMediaElementSource(el).connect(gain);
-      gain.connect(ctx.destination);
-      g.stems.set(s, { el, gain });
-    }
+    // Route the master mix element through the context once. Note:
+    // MediaElementSource permanently reroutes the element, so this
+    // chain stays alive for the rest of the session.
+    const mixGain = ctx.createGain();
+    const pitchIn = ctx.createGain();
+    const out = ctx.createGain();
+    ctx.createMediaElementSource(audio).connect(mixGain);
+    mixGain.connect(pitchIn);
+    pitchIn.connect(out); // direct until the worklet takes over
+    out.connect(ctx.destination);
+    const g = {
+      mix: mixGain,
+      pitchIn,
+      out,
+      worklet: null as AudioWorkletNode | null,
+      stems: new Map<string, { el: HTMLAudioElement; gain: GainNode }>(),
+    };
+    stemGraphRef.current = g;
+    const ready = registerPitchWorklet(ctx)
+      .then(() => {
+        const node = createPitchNode(ctx);
+        g.pitchIn.disconnect();
+        g.pitchIn.connect(node);
+        node.connect(g.out);
+        g.worklet = node;
+        node.parameters
+          .get("ratio")
+          ?.setTargetAtTime(
+            2 ** (pitchRef.current / 12),
+            ctx.currentTime,
+            0.03,
+          );
+      })
+      .catch((e: unknown) => {
+        console.warn("pitch worklet unavailable — passthrough", e);
+      });
+    graphReadyRef.current = ready;
+    await ready;
     void ctx.resume();
     return g;
   }, []);
+
+  const ensureStemGraph = useCallback(
+    async (song: SongSummary) => {
+      if (!song.stems || !song.stemBaseUrl) return;
+      const audio = audioRef.current;
+      if (!audio) return;
+      const g = await ensureGraph();
+      if (!g) return;
+      if (stemGraphSlugRef.current !== song.slug) {
+        for (const { el, gain } of g.stems.values()) {
+          el.pause();
+          el.removeAttribute("src");
+          gain.disconnect();
+        }
+        g.stems.clear();
+        stemGraphSlugRef.current = song.slug;
+      }
+      for (const s of song.stems) {
+        if (g.stems.has(s)) continue;
+        const el = new Audio();
+        el.preload = "auto";
+        el.preservesPitch = true;
+        el.volume = audio.volume;
+        const url = stemUrl(song, s);
+        if (!url) continue;
+        el.src = url;
+        const ctx = audioCtxRef.current!;
+        const gain = ctx.createGain();
+        gain.gain.value = 0; // starts silent
+        ctx.createMediaElementSource(el).connect(gain);
+        gain.connect(g.pitchIn);
+        g.stems.set(s, { el, gain });
+      }
+    },
+    [ensureGraph],
+  );
 
   const applyStemGains = useCallback(
     (song: SongSummary | null, levels: Record<string, number>) => {
@@ -220,15 +275,17 @@ export function useAudioPlayer(songs: SongSummary[]) {
       audio.src = song.audioUrl; // always the mix; stems layer on top
       audio.load();
 
-      // Rebuild the stem layer for the new song (keeps minus-one state)
+      // Rebuild the stem layer for the new song (keeps minus-one state);
+      // also build the graph when a pitch shift is engaged.
       if (song.stems?.length) {
         try {
-          ensureStemGraph(song);
+          await ensureStemGraph(song);
         } catch {
           /* ignore stem graph error */
         }
       } else {
         teardownStems();
+        if (pitchRef.current !== 0) await ensureGraph();
       }
       applyStemGains(song, stemLevelsRef.current);
 
@@ -411,13 +468,32 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const next = { ...stemLevelsRef.current, [name]: v };
       setStemLevelsState(next);
       stemLevelsRef.current = next;
-      if (!stemsAllFull(song, next)) {
-        ensureStemGraph(song);
-        syncStemPlayback();
-      }
-      applyStemGains(song, next);
+      void ensureStemGraph(song).then(() => {
+        if (!stemsAllFull(song, next)) syncStemPlayback();
+        applyStemGains(song, next);
+      });
     },
     [applyStemGains, ensureStemGraph, syncStemPlayback],
+  );
+
+  /** Pitch shift in semitones (-12..12). 0 bypasses the worklet. */
+  const setPitch = useCallback(
+    (semitones: number) => {
+      const v = Math.round(clamp(semitones, -12, 12));
+      setPitchState(v);
+      pitchRef.current = v;
+      const ctx = audioCtxRef.current;
+      const node = stemGraphRef.current?.worklet;
+      if (ctx && node) {
+        node.parameters
+          .get("ratio")
+          ?.setTargetAtTime(2 ** (v / 12), ctx.currentTime, 0.03);
+      } else if (v !== 0) {
+        // build the graph lazily; the worklet reads pitchRef on creation
+        void ensureGraph();
+      }
+    },
+    [ensureGraph],
   );
 
   /** Reset every stem fader to full (back to the original mix). */
@@ -595,12 +671,14 @@ export function useAudioPlayer(songs: SongSummary[]) {
     buffered,
     playbackMode,
     stemLevels,
+    pitch,
     playSong,
     toggle,
     play,
     pause,
     setStemLevel,
     resetStemLevels,
+    setPitch,
     seek,
     skip,
     setVolume,
