@@ -10,6 +10,7 @@ import type { SongMarker } from "../hooks/useMarkers";
 import type { SongSummary } from "../types";
 import { formatTimePrecise } from "../utils/format";
 import { SpeedControl } from "./SpeedControl";
+import { StemFader } from "./StemFader";
 import { VolumeFader } from "./VolumeFader";
 import { WaveformSeekBar } from "./WaveformSeekBar";
 
@@ -25,9 +26,9 @@ type Props = {
   loopEnabled: boolean;
   buffered: number;
   playbackMode: PlaybackMode;
-  stemEnabled: Record<string, boolean>;
-  onStemToggle: (name: string) => void;
-  onStemAll: () => void;
+  stemLevels: Record<string, number>;
+  onStemLevel: (name: string, level: number) => void;
+  onStemReset: () => void;
   markers: SongMarker[];
   onMarkerAdd: (time: number, label: string) => void;
   onMarkerUpdate: (
@@ -63,9 +64,9 @@ export function PlayerBar({
   loopEnabled,
   buffered,
   playbackMode,
-  stemEnabled,
-  onStemToggle,
-  onStemAll,
+  stemLevels,
+  onStemLevel,
+  onStemReset,
   markers,
   onMarkerAdd,
   onMarkerUpdate,
@@ -90,13 +91,14 @@ export function PlayerBar({
   const modeLabel = PLAYBACK_MODE_LABELS[playbackMode];
   const [mixerOpen, setMixerOpen] = useState(false);
   const stems = song?.stems ?? [];
-  const allStemsOn = stems.every((s) => stemEnabled[s] !== false);
-  const offStems = stems.filter((s) => stemEnabled[s] === false);
+  const levels = stemLevels ?? {};
+  const touched = stems.filter((s) => (levels[s] ?? 1) < 0.995);
+  const allStemsOn = touched.length === 0;
   const stemChipLabel = allStemsOn
     ? "mix"
-    : offStems.length === 1
-      ? `-${offStems[0]}`
-      : `${stems.length - offStems.length}/${stems.length}`;
+    : touched.length === 1 && (levels[touched[0]] ?? 1) <= 0.005
+      ? `-${touched[0]}`
+      : `${stems.length - touched.length}/${stems.length}`;
 
   return (
     <footer className="player practice-player">
@@ -282,7 +284,7 @@ export function PlayerBar({
           aria-expanded={mixerOpen}
           aria-label="Open mixer"
           title={`Mixer — speed ${playbackRate.toFixed(2)}×, ${
-            allStemsOn ? "original mix" : `minus-one (${offStems.join(", ")} muted)`
+            allStemsOn ? "original mix" : `stems: ${touched.join(", ")} attenuated`
           }, volume ${Math.round((muted ? 0 : volume) * 100)}%`}
         >
           <span
@@ -298,7 +300,7 @@ export function PlayerBar({
             title={
               allStemsOn
                 ? "Original mix"
-                : `Minus-one: ${offStems.join(", ")} muted`
+                : `Stem mix: ${touched.join(", ")} attenuated`
             }
           >
             {stemChipLabel}
@@ -358,32 +360,27 @@ export function PlayerBar({
                     Stems
                     <span className="mixer-section-hint">
                       {" "}
-                      — uncheck to mute (minus-one)
+                      — drag faders to blend (all up = original mix)
                     </span>
                     {!allStemsOn && (
                       <button
                         type="button"
                         className="stem-all-btn"
-                        onClick={onStemAll}
+                        onClick={onStemReset}
                       >
-                        All
+                        Reset
                       </button>
                     )}
                   </p>
-                  <div className="stem-checks">
+                  <div className="mx-fader-bank">
                     {stems.map((s) => (
-                      <label
+                      <StemFader
                         key={s}
-                        className={`stem-check mono${stemEnabled[s] === false ? "" : " is-on"}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={stemEnabled[s] !== false}
-                          disabled={disabled}
-                          onChange={() => onStemToggle(s)}
-                        />
-                        <span>{s}</span>
-                      </label>
+                        label={s}
+                        value={levels[s] ?? 1}
+                        disabled={disabled}
+                        onChange={(v) => onStemLevel(s, v)}
+                      />
                     ))}
                   </div>
                 </section>

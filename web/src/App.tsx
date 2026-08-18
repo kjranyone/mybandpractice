@@ -235,9 +235,9 @@ export default function App() {
         loopEnabled={player.loopEnabled}
         buffered={player.buffered}
         playbackMode={player.playbackMode}
-        stemEnabled={player.stemEnabled}
-        onStemToggle={player.toggleStem}
-        onStemAll={player.enableAllStems}
+        stemLevels={player.stemLevels}
+        onStemLevel={player.setStemLevel}
+        onStemReset={player.resetStemLevels}
         markers={markerState.markers}
         onMarkerAdd={markerState.addMarker}
         onMarkerUpdate={markerState.updateMarker}
