@@ -62,14 +62,14 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const [buffered, setBuffered] = useState(0); // 0–1 fraction
   const [playbackMode, setPlaybackModeState] =
     useState<PlaybackMode>("sequential");
-  /** per-stem enable flags; missing/true = enabled. ALL enabled => the
-   * original mix file plays; any disabled => enabled stems are summed
-   * live via Web Audio (minus-one). */
-  const [stemEnabled, setStemEnabledState] = useState<Record<string, boolean>>(
+  /** Per-stem fader levels 0–1 (missing = full). All full => the original
+   * mix file plays; any fader below full => stems are summed live via Web
+   * Audio with these gains (physical-mixer style). */
+  const [stemLevels, setStemLevelsState] = useState<Record<string, number>>(
     {},
   );
-  const stemEnabledRef = useRef<Record<string, boolean>>({});
-  stemEnabledRef.current = stemEnabled;
+  const stemLevelsRef = useRef<Record<string, number>>({});
+  stemLevelsRef.current = stemLevels;
 
   const loopRef = useRef<LoopRegion | null>(null);
   const loopEnabledRef = useRef(false);
@@ -86,10 +86,10 @@ export function useAudioPlayer(songs: SongSummary[]) {
   } | null>(null);
   const stemGraphSlugRef = useRef<string | null>(null);
 
-  const stemsAllOn = (
+  const stemsAllFull = (
     song: SongSummary | null,
-    enabled: Record<string, boolean>,
-  ) => !song?.stems || song.stems.every((s) => enabled[s] !== false);
+    levels: Record<string, number>,
+  ) => !song?.stems || song.stems.every((s) => (levels[s] ?? 1) >= 0.995);
 
   const teardownStems = useCallback(() => {
     const g = stemGraphRef.current;
@@ -155,20 +155,20 @@ export function useAudioPlayer(songs: SongSummary[]) {
   }, []);
 
   const applyStemGains = useCallback(
-    (song: SongSummary | null, enabled: Record<string, boolean>) => {
+    (song: SongSummary | null, levels: Record<string, number>) => {
       const g = stemGraphRef.current;
       const ctx = audioCtxRef.current;
       if (!g || !ctx) return;
-      const allOn = stemsAllOn(song, enabled);
+      const allFull = stemsAllFull(song, levels);
       const t = ctx.currentTime;
       const ramp = (node: GainNode, v: number) => {
         node.gain.cancelScheduledValues(t);
         node.gain.setValueAtTime(node.gain.value, t);
         node.gain.linearRampToValueAtTime(v, t + 0.03);
       };
-      ramp(g.mix, allOn ? 1 : 0);
+      ramp(g.mix, allFull ? 1 : 0);
       for (const [name, { gain }] of g.stems) {
-        ramp(gain, allOn ? 0 : enabled[name] !== false ? 1 : 0);
+        ramp(gain, allFull ? 0 : levels[name] ?? 1);
       }
     },
     [],
@@ -226,7 +226,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
       } else {
         teardownStems();
       }
-      applyStemGains(song, stemEnabledRef.current);
+      applyStemGains(song, stemLevelsRef.current);
 
       try {
         await audio.play();
@@ -396,18 +396,18 @@ export function useAudioPlayer(songs: SongSummary[]) {
     syncStemPlayback();
   }, [syncStemPlayback]);
 
-  /** Toggle one stem off/on. All-on plays the original mix; any stem
-   * disabled switches to live-summed remaining stems (minus-one). */
-  const toggleStem = useCallback(
-    (name: string) => {
+  /** Set one stem fader level (0–1). All full plays the original mix;
+   * any fader below full switches to live-summed stems with these gains. */
+  const setStemLevel = useCallback(
+    (name: string, level: number) => {
       const song = currentRef.current;
       const audio = audioRef.current;
       if (!song?.stems?.includes(name) || !audio) return;
-      const cur = stemEnabledRef.current;
-      const next = { ...cur, [name]: cur[name] !== false ? false : true };
-      setStemEnabledState(next);
-      stemEnabledRef.current = next;
-      if (!stemsAllOn(song, next)) {
+      const v = clamp(level, 0, 1);
+      const next = { ...stemLevelsRef.current, [name]: v };
+      setStemLevelsState(next);
+      stemLevelsRef.current = next;
+      if (!stemsAllFull(song, next)) {
         ensureStemGraph(song);
         syncStemPlayback();
       }
@@ -416,14 +416,14 @@ export function useAudioPlayer(songs: SongSummary[]) {
     [applyStemGains, ensureStemGraph, syncStemPlayback],
   );
 
-  /** Re-enable every stem (back to the original mix). */
-  const enableAllStems = useCallback(() => {
+  /** Reset every stem fader to full (back to the original mix). */
+  const resetStemLevels = useCallback(() => {
     const song = currentRef.current;
     if (!song?.stems) return;
-    const next: Record<string, boolean> = {};
-    for (const s of song.stems) next[s] = true;
-    setStemEnabledState(next);
-    stemEnabledRef.current = next;
+    const next: Record<string, number> = {};
+    for (const s of song.stems) next[s] = 1;
+    setStemLevelsState(next);
+    stemLevelsRef.current = next;
     applyStemGains(song, next);
   }, [applyStemGains]);
 
@@ -590,13 +590,13 @@ export function useAudioPlayer(songs: SongSummary[]) {
     loopEnabled,
     buffered,
     playbackMode,
-    stemEnabled,
+    stemLevels,
     playSong,
     toggle,
     play,
     pause,
-    toggleStem,
-    enableAllStems,
+    setStemLevel,
+    resetStemLevels,
     seek,
     skip,
     setVolume,
