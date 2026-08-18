@@ -11,6 +11,10 @@
 
 const PROCESSOR_NAME = "pitch-shifter";
 
+/** Grain size in samples — also determines worklet latency (~1.5x grain),
+ * used to time-align bypass paths that skip the worklet. */
+export const PITCH_GRAIN_SAMPLES = 3072;
+
 const PROCESSOR_SOURCE = `
 class PitchShifterProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {

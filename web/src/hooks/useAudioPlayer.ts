@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPitchNode, registerPitchWorklet } from "../audio/pitchWorklet";
+import {
+  PITCH_GRAIN_SAMPLES,
+  createPitchNode,
+  registerPitchWorklet,
+} from "../audio/pitchWorklet";
 import type { SongSummary } from "../types";
 import { clamp } from "../utils/format";
 
@@ -88,7 +92,8 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const stemGraphRef = useRef<{
     mix: GainNode; // master mix element route (kept forever once created)
-    pitchIn: GainNode; // all sources sum here, feed the pitch worklet
+    pitchIn: GainNode; // pitched sources sum here, feed the pitch worklet
+    bypass: GainNode; // unpitched sources (drums while shifting)
     out: GainNode; // post-pitch master
     worklet: AudioWorkletNode | null;
     stems: Map<string, { el: HTMLAudioElement; gain: GainNode }>;
@@ -136,14 +141,23 @@ export function useAudioPlayer(songs: SongSummary[]) {
     // chain stays alive for the rest of the session.
     const mixGain = ctx.createGain();
     const pitchIn = ctx.createGain();
+    const bypass = ctx.createGain();
+    // Time-align the unpitched path with the worklet's grain latency
+    // (~1.5 x grain samples) so bypassed drums stay in sync.
+    const bypassDelay = ctx.createDelay(0.5);
+    bypassDelay.delayTime.value =
+      (1.5 * PITCH_GRAIN_SAMPLES + 128) / ctx.sampleRate;
     const out = ctx.createGain();
     ctx.createMediaElementSource(audio).connect(mixGain);
     mixGain.connect(pitchIn);
     pitchIn.connect(out); // direct until the worklet takes over
+    bypass.connect(bypassDelay);
+    bypassDelay.connect(out);
     out.connect(ctx.destination);
     const g = {
       mix: mixGain,
       pitchIn,
+      bypass,
       out,
       worklet: null as AudioWorkletNode | null,
       stems: new Map<string, { el: HTMLAudioElement; gain: GainNode }>(),
@@ -171,6 +185,19 @@ export function useAudioPlayer(songs: SongSummary[]) {
     await ready;
     void ctx.resume();
     return g;
+  }, []);
+
+  /** (Re)connect every stem gain to its bus based on current pitch. */
+  const routeStems = useCallback(() => {
+    const g = stemGraphRef.current;
+    if (!g) return;
+    const unpitched = pitchRef.current !== 0;
+    for (const [name, { gain }] of g.stems) {
+      gain.disconnect();
+      gain.connect(
+        unpitched && name === "drums" ? g.bypass : g.pitchIn,
+      );
+    }
   }, []);
 
   const ensureStemGraph = useCallback(
@@ -202,7 +229,9 @@ export function useAudioPlayer(songs: SongSummary[]) {
         const gain = ctx.createGain();
         gain.gain.value = 0; // starts silent
         ctx.createMediaElementSource(el).connect(gain);
-        gain.connect(g.pitchIn);
+        gain.connect(
+          pitchRef.current !== 0 && s === "drums" ? g.bypass : g.pitchIn,
+        );
         g.stems.set(s, { el, gain });
       }
     },
@@ -214,16 +243,21 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const g = stemGraphRef.current;
       const ctx = audioCtxRef.current;
       if (!g || !ctx) return;
-      const allFull = stemsAllFull(song, levels);
+      // While pitch shifting a song that has a drums stem, play the
+      // separated stems (all full) so drums can bypass the worklet —
+      // otherwise fall back to the pristine mix file when untouched.
+      const drumsBypassed =
+        pitchRef.current !== 0 && !!song?.stems?.includes("drums");
+      const useMix = stemsAllFull(song, levels) && !drumsBypassed;
       const t = ctx.currentTime;
       const ramp = (node: GainNode, v: number) => {
         node.gain.cancelScheduledValues(t);
         node.gain.setValueAtTime(node.gain.value, t);
         node.gain.linearRampToValueAtTime(v, t + 0.03);
       };
-      ramp(g.mix, allFull ? 1 : 0);
+      ramp(g.mix, useMix ? 1 : 0);
       for (const [name, { gain }] of g.stems) {
-        ramp(gain, allFull ? 0 : levels[name] ?? 1);
+        ramp(gain, useMix ? 0 : levels[name] ?? 1);
       }
     },
     [],
@@ -476,7 +510,9 @@ export function useAudioPlayer(songs: SongSummary[]) {
     [applyStemGains, ensureStemGraph, syncStemPlayback],
   );
 
-  /** Pitch shift in semitones (-12..12). 0 bypasses the worklet. */
+  /** Pitch shift in semitones (-12..12). 0 bypasses the worklet. While
+   * shifting, the drums stem routes around the worklet (no key needed)
+   * with grain-latency compensation to stay in sync. */
   const setPitch = useCallback(
     (semitones: number) => {
       const v = Math.round(clamp(semitones, -12, 12));
@@ -488,12 +524,25 @@ export function useAudioPlayer(songs: SongSummary[]) {
         node.parameters
           .get("ratio")
           ?.setTargetAtTime(2 ** (v / 12), ctx.currentTime, 0.03);
-      } else if (v !== 0) {
-        // build the graph lazily; the worklet reads pitchRef on creation
-        void ensureGraph();
+      }
+      const song = currentRef.current;
+      if (v !== 0) {
+        if (song?.stems?.includes("drums")) {
+          // engage the stem layer so drums can bypass the shifter
+          void ensureStemGraph(song).then(() => {
+            routeStems();
+            applyStemGains(song, stemLevelsRef.current);
+            syncStemPlayback();
+          });
+        } else if (!stemGraphRef.current) {
+          void ensureGraph();
+        }
+      } else if (stemGraphRef.current) {
+        routeStems();
+        applyStemGains(song, stemLevelsRef.current);
       }
     },
-    [ensureGraph],
+    [applyStemGains, ensureGraph, ensureStemGraph, routeStems, syncStemPlayback],
   );
 
   /** Reset every stem fader to full (back to the original mix). */
