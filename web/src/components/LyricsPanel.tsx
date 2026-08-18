@@ -139,7 +139,6 @@ export function LyricsPanel({
     <main className="main">
       <header className="track-header">
         <div>
-          <p className="eyebrow">Now {song.audioUrl ? "playing" : "selected"}</p>
           <h1>{song.title}</h1>
           <p className="track-artist">{song.artist}</p>
           <div className="track-chips">
