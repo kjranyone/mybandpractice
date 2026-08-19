@@ -107,6 +107,140 @@ export function toLeadSheetNotation(chord: string): string {
   return `${root}${fmtQual}${bass ? `/${bass}` : ""}`;
 }
 
+export type DiatonicInfo = {
+  isDiatonic: boolean;
+  roman: string | null;
+};
+
+const QUALITY_CANON: Record<string, string> = {
+  "": "maj",
+  M: "maj",
+  maj: "maj",
+  m: "min",
+  min: "min",
+  "-": "min",
+  m7: "min7",
+  min7: "min7",
+  "-7": "min7",
+  "7": "7",
+  maj7: "maj7",
+  M7: "maj7",
+  "6": "6",
+  maj6: "6",
+  m6: "min6",
+  min6: "min6",
+  dim: "dim",
+  "°": "dim",
+  o: "dim",
+  dim7: "dim7",
+  "°7": "dim7",
+  hdim7: "hdim7",
+  "m7-5": "hdim7",
+  m7b5: "hdim7",
+  "ø7": "hdim7",
+  minmaj7: "minmaj7",
+  mM7: "minmaj7",
+  aug: "aug",
+  "+": "aug",
+  sus2: "sus2",
+  sus4: "sus4",
+};
+
+const MAJOR_SCALE = [0, 2, 4, 5, 7, 9, 11];
+const MINOR_SCALE = [0, 2, 3, 5, 7, 8, 10];
+
+const MAJOR_DEG_QUAL: string[][] = [
+  ["maj", "maj7", "6"],
+  ["min", "min7", "min6"],
+  ["min", "min7"],
+  ["maj", "maj7", "6"],
+  ["maj", "7", "maj7"],
+  ["min", "min7"],
+  ["dim", "hdim7"],
+];
+
+const MINOR_DEG_QUAL: string[][] = [
+  ["min", "min7", "min6", "minmaj7"],
+  ["dim", "hdim7"],
+  ["maj", "maj7"],
+  ["min", "min7"],
+  ["min", "min7", "maj", "7"],
+  ["maj", "maj7"],
+  ["maj", "maj7", "dim7", "hdim7"],
+];
+
+const MAJOR_ROMAN: Record<number, string> = {
+  0: "I", 1: "♭II", 2: "II", 3: "♭III", 4: "III", 5: "IV",
+  6: "♯IV", 7: "V", 8: "♭VI", 9: "VI", 10: "♭VII", 11: "VII",
+};
+
+const MINOR_ROMAN: Record<number, string> = {
+  0: "i", 1: "♭II", 2: "ii", 3: "III", 4: "♯iii", 5: "iv",
+  6: "♯iv", 7: "v", 8: "VI", 9: "♯vi", 10: "VII", 11: "♯vii",
+};
+
+function canonQuality(raw: string): string {
+  return QUALITY_CANON[raw] ?? raw;
+}
+
+/** Classify a chord symbol against a key ("A#" = major, "G#m" = minor):
+ * returns whether the chord is diatonic and its roman numeral. */
+export function analyzeDiatonic(chord: string, key: string): DiatonicInfo {
+  if (!chord || chord === "N.C." || chord === "--" || chord === "X" || !key) {
+    return { isDiatonic: false, roman: null };
+  }
+
+  const km = key.match(/^([A-G][#b]?)(m)?$/);
+  if (!km) return { isDiatonic: false, roman: null };
+  const keyRoot = FLAT_TO_SHARP[km[1]] ?? km[1];
+  const isMinor = Boolean(km[2]);
+  const keyIdx = SEMITONES.indexOf(keyRoot);
+  if (keyIdx === -1) return { isDiatonic: false, roman: null };
+
+  let base = chord.split("/")[0];
+  let root = base;
+  let qualRaw = "";
+  if (base.length >= 2 && (base[1] === "#" || base[1] === "b")) {
+    root = base.slice(0, 2);
+    qualRaw = base.slice(2);
+  } else if (base.length >= 1) {
+    root = base.slice(0, 1);
+    qualRaw = base.slice(1);
+  }
+  const rootCanon = FLAT_TO_SHARP[root] ?? root;
+  const rootIdx = SEMITONES.indexOf(rootCanon);
+  if (rootIdx === -1) return { isDiatonic: false, roman: null };
+
+  const qual = canonQuality(qualRaw);
+  const offset = ((rootIdx - keyIdx) % 12 + 12) % 12;
+  const scale = isMinor ? MINOR_SCALE : MAJOR_SCALE;
+  const degree = scale.indexOf(offset);
+
+  const romanTable = isMinor ? MINOR_ROMAN : MAJOR_ROMAN;
+  let roman = romanTable[offset] ?? null;
+
+  if (degree === -1) {
+    return { isDiatonic: false, roman };
+  }
+
+  const allowed = isMinor ? MINOR_DEG_QUAL[degree] : MAJOR_DEG_QUAL[degree];
+  const isDiatonic = qual === "sus2" || qual === "sus4" || allowed.includes(qual);
+
+  if (roman && isDiatonic) {
+    const isDimFamily = qual === "dim" || qual === "hdim7" || qual === "dim7";
+    const isMinFamily = qual === "min" || qual === "min7" || qual === "min6" || qual === "minmaj7";
+    const isMajAtV = isMinor && offset === 7 && (qual === "maj" || qual === "7" || qual === "maj7");
+    if (isDimFamily) {
+      roman = `${roman.toLowerCase()}°`;
+    } else if (isMinFamily) {
+      roman = roman.toLowerCase();
+    } else if (isMajAtV) {
+      roman = "V";
+    }
+  }
+  return { isDiatonic, roman };
+}
+
 function isChordSegment(v: unknown): v is ChordSegment {
   if (typeof v !== "object" || v === null) return false;
   const c = v as Record<string, unknown>;

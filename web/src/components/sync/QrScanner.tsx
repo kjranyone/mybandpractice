@@ -6,6 +6,8 @@ import {
 import jsQR from "jsqr";
 import { isNative } from "../../utils/nativeSongs";
 
+const CAMERA_KEY = "sync-camera-id";
+
 type Props = {
   /** prompt shown above the scanner */
   title: string;
@@ -33,6 +35,17 @@ export function QrScanner({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [paste, setPaste] = useState("");
   const foundRef = useRef(false);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState<string>(
+    () => localStorage.getItem(CAMERA_KEY) ?? "",
+  );
+  const [activeId, setActiveId] = useState<string>("");
+
+  const pickCamera = (id: string) => {
+    localStorage.setItem(CAMERA_KEY, id);
+    setActiveId("");
+    setDeviceId(id);
+  };
 
   const accept = (data: string) => {
     if (foundRef.current) return;
@@ -68,12 +81,21 @@ export function QrScanner({
     void (async () => {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
+          video: deviceId
+            ? { deviceId: { exact: deviceId } }
+            : { facingMode: "environment" },
         });
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
+        const trackDeviceId = stream.getVideoTracks()[0]?.getSettings().deviceId;
+        if (trackDeviceId) {
+          localStorage.setItem(CAMERA_KEY, trackDeviceId);
+          setActiveId(trackDeviceId);
+        }
+        const all = await navigator.mediaDevices.enumerateDevices();
+        if (!cancelled) setDevices(all.filter((d) => d.kind === "videoinput"));
         const v = videoRef.current;
         if (!v) return;
         v.srcObject = stream;
@@ -112,7 +134,7 @@ export function QrScanner({
       stream?.getTracks().forEach((t) => t.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [deviceId]);
 
   return (
     <div className={`sync-scan${passive ? " is-passive" : ""}`}>
@@ -124,6 +146,21 @@ export function QrScanner({
           ) : (
             <video ref={videoRef} playsInline muted />
           )}
+        </div>
+      )}
+      {!isNative() && devices.length > 1 && (
+        <div className="sync-camera-pick">
+          <label className="sync-camera-label">Camera</label>
+          <select
+            value={activeId || deviceId || devices[0]?.deviceId || ""}
+            onChange={(e) => pickCamera(e.target.value)}
+          >
+            {devices.map((d, i) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `Camera ${i + 1}`}
+              </option>
+            ))}
+          </select>
         </div>
       )}
       {!isNative() && (

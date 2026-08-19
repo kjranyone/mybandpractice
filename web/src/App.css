@@ -1428,8 +1428,15 @@
 }
 
 /* Mixer status chip + floating modal (opened from the player deck) */
-.mixer-toggle {
+.deck-side {
   grid-area: mix;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.mixer-toggle {
   height: 38px;
   padding: 0 0.7rem;
   border-radius: 8px;
@@ -1534,26 +1541,37 @@
   color: var(--text-faint);
 }
 
-.mixer-row {
-  display: flex;
-  gap: 1.25rem;
+/* Pitch (row 1) and Speed (row 2) share the left column;
+   the volume fader spans both rows on the right. */
+.mixer-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "pitch volume"
+    "speed volume";
+  column-gap: 1.25rem;
+  row-gap: 0.75rem;
   align-items: stretch;
 }
 
-.mixer-row .mixer-speed {
-  flex: 1;
+.mixer-controls .mixer-pitch {
+  grid-area: pitch;
+  min-width: 0;
 }
 
-.mixer-row .mixer-volume {
+.mixer-controls .mixer-speed {
+  grid-area: speed;
+  min-width: 0;
+}
+
+.mixer-controls .mixer-volume {
+  grid-area: volume;
   align-items: center;
+  align-self: stretch;
   padding: 0.35rem 0.5rem;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.25);
-}
-
-.mixer-row .vol-fader {
-  min-height: 150px;
 }
 
 /* Stem fader bank (inside the mixer modal) */
@@ -1689,14 +1707,21 @@
 }
 
 /* Pitch (mixer modal) */
+.pitch-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+}
+
 .mixer-pitch .pitch-row {
   display: flex;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.45rem 0.5rem 0.35rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.25);
 }
 
 .pitch-slider {
@@ -1709,10 +1734,9 @@
 }
 
 .pitch-val {
-  min-width: 3.2em;
-  text-align: right;
-  font-size: 0.72rem;
-  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-faint);
 }
 
 .pitch-val.is-on {
@@ -1741,14 +1765,8 @@
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-}
-
-.speed-kicker {
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-faint);
+  gap: 0.5rem;
+  min-width: 0;
 }
 
 .speed-value {
@@ -2021,12 +2039,16 @@
     display: none;
   }
 
-  /* Mixer modal: stack speed above the volume fader on narrow screens */
-  .mixer-row {
-    flex-direction: column;
+  /* Mixer modal: single column — pitch, speed, then volume on narrow screens */
+  .mixer-controls {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "pitch"
+      "speed"
+      "volume";
   }
 
-  .mixer-row .vol-fader {
+  .mixer-controls .vol-fader {
     min-height: 110px;
   }
 }
@@ -2051,7 +2073,7 @@
     justify-content: center;
   }
 
-  .mixer-toggle {
+  .deck-side {
     justify-self: end;
   }
 }
@@ -2160,6 +2182,45 @@
   height: auto;
   margin: 0 auto;
   /* no border-radius: rounded corners clip the finder patterns */
+}
+
+/* QR + passive scanner side by side so the send screen never scrolls */
+.sync-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 13rem) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: stretch;
+  width: 100%;
+}
+
+.sync-pair .sync-qr {
+  width: 100%;
+  align-self: center;
+}
+
+.sync-pair .sync-scan {
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.sync-pair .sync-scan.is-passive .sync-scan-video {
+  max-width: none;
+  min-height: 110px;
+}
+
+.sync-pair .sync-scan.is-passive .sync-scan-video video {
+  max-height: 110px;
+}
+
+@media (max-width: 24rem) {
+  .sync-pair {
+    grid-template-columns: 1fr;
+  }
+
+  .sync-pair .sync-scan.is-passive .sync-scan-video {
+    max-width: 20rem;
+    min-height: 130px;
+  }
 }
 
 .sync-hint {
@@ -2747,6 +2808,31 @@
   font-size: 0.7rem;
 }
 
+.sync-camera-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sync-camera-pick .sync-camera-label {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+
+.sync-camera-pick select {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
 .sync-cancel {
   align-self: center;
   padding: 0.35rem 1rem;
@@ -2821,18 +2907,19 @@
   max-height: 130px;
 }
 
-/* —— Chord Toggle Button in Time Bar (Top Row Right End) —— */
+/* —— Chord Toggle Button (player deck, next to Mixer) —— */
 .chord-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 20px;
-  padding: 0 0.45rem;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: rgba(13, 17, 23, 0.95);
+  height: 38px;
+  width: 5rem;
+  padding: 0 0.35rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.12s ease;
@@ -2842,12 +2929,13 @@
 }
 
 .chord-toggle .chord-name {
-  font-size: 0.74rem;
+  font-size: 0.86rem;
   font-weight: 800;
   color: var(--text);
   text-align: center;
-  min-width: 1.4rem;
   letter-spacing: -0.01em;
+  max-width: 100%;
+  overflow: visible;
 }
 
 .chord-toggle.has-chord .chord-name {
@@ -3192,6 +3280,62 @@
 .lead-chord-beats {
   font-size: 0.56rem;
   color: var(--text-muted);
+}
+
+/* Diatonic / Non-diatonic coloring */
+.lead-chord-btn.is-diatonic {
+  border-color: rgba(147, 197, 253, 0.22);
+  background: rgba(147, 197, 253, 0.05);
+}
+
+.lead-chord-btn.is-diatonic .lead-chord-root {
+  color: #93c5fd;
+}
+
+.lead-chord-btn.is-nondiatonic {
+  border-color: rgba(251, 113, 133, 0.4);
+  background: rgba(251, 113, 133, 0.07);
+}
+
+.lead-chord-btn.is-nondiatonic .lead-chord-root {
+  color: #fb7185;
+}
+
+.lead-chord-btn.is-nondiatonic .lead-chord-quality {
+  color: #fda4af;
+}
+
+.lead-chord-degree {
+  font-size: 0.58rem;
+  font-weight: 800;
+  color: #93c5fd;
+  letter-spacing: 0.02em;
+}
+
+.lead-chord-degree.is-nd {
+  color: #fb7185;
+}
+
+.chip-diatonic,
+.chip-nondiatonic {
+  font-size: 0.68rem;
+  gap: 0.3rem;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legend-dot.dot-diatonic {
+  background: #93c5fd;
+}
+
+.legend-dot.dot-nondiatonic {
+  background: #fb7185;
 }
 
 /* Dominant V7 tension glow */
