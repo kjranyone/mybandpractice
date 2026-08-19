@@ -104,6 +104,10 @@ Write-Host "==> target device: $target" -ForegroundColor Cyan
 function Install-App {
   Push-Location $Web
   try {
+    Write-Host "==> installing web dependencies (npm install) ..." -ForegroundColor Cyan
+    npm install
+    if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+
     Write-Host "==> building web ..." -ForegroundColor Cyan
     npm run build
     if ($LASTEXITCODE -ne 0) { throw "vite build failed" }
