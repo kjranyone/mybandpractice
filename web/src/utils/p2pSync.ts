@@ -4,6 +4,7 @@ import {
   parseFrame,
   parseMessage,
   waitIce,
+  withRealHostCandidates,
   type SyncManifest,
   type SyncMessage,
 } from "./p2pProtocol";
@@ -281,9 +282,14 @@ export async function createAnswerFromOffer(
   const pc = new RTCPeerConnection({ iceServers: [] });
   const client = new SyncClient(pc, fs, events);
   await pc.setRemoteDescription({ type: "offer", sdp: offer.sdp });
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  await waitIce(pc, 3000);
-  if (!pc.localDescription) throw new Error("Failed to create answer");
-  return { answerPayload: encodeSdp("answer", pc.localDescription.sdp), client };
+  // hold a media stream through ICE gathering so Chromium exposes real
+  // host IPs instead of mDNS .local names in the answer SDP
+  const answerPayload = await withRealHostCandidates(async () => {
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitIce(pc, 3000);
+    if (!pc.localDescription) throw new Error("Failed to create answer");
+    return encodeSdp("answer", pc.localDescription.sdp);
+  });
+  return { answerPayload, client };
 }

@@ -2151,7 +2151,7 @@
   width: min(100%, 17rem);
   height: auto;
   margin: 0 auto;
-  border-radius: 8px;
+  /* no border-radius: rounded corners clip the finder patterns */
 }
 
 .sync-hint {

@@ -5,6 +5,7 @@ import {
   encodeSdp,
   frameChunk,
   waitIce,
+  withRealHostCandidates,
   type ManifestFile,
   type SyncManifest,
 } from "./p2pProtocol";
@@ -251,19 +252,23 @@ export async function createOfferConnection(
   sender: SyncSender;
   offerPayload: string;
 }> {
-  const pc = new RTCPeerConnection({ iceServers: [] });
-  const dc = pc.createDataChannel("mbp-sync", { ordered: true });
-  const sender = new SyncSender(dc, fs);
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  await waitIce(pc, 1500);
-  if (!pc.localDescription) throw new Error("Could not gather connection info");
-  return {
-    pc,
-    dc,
-    sender,
-    offerPayload: encodeSdp("offer", pc.localDescription.sdp),
-  };
+  return withRealHostCandidates(async () => {
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    const dc = pc.createDataChannel("mbp-sync", { ordered: true });
+    const sender = new SyncSender(dc, fs);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitIce(pc, 1500);
+    if (!pc.localDescription) {
+      throw new Error("Could not gather connection info");
+    }
+    return {
+      pc,
+      dc,
+      sender,
+      offerPayload: encodeSdp("offer", pc.localDescription.sdp),
+    };
+  });
 }
 
 /** Sender-side: accept the answer payload scanned from the receiver. */
