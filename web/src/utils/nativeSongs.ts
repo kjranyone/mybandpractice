@@ -234,3 +234,87 @@ export async function writeNativeJson(
     data: JSON.stringify(data, null, 2) + "\n",
   });
 }
+
+/** Per-song on-device storage usage in bytes (audio + stems + text). */
+export async function getNativeSongStorage(): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  let root: ReaddirResult;
+  try {
+    root = await Filesystem.readdir({
+      path: SONGS_ROOT,
+      directory: Directory.External,
+    });
+  } catch {
+    return out;
+  }
+
+  const dirSize = async (dirPath: string): Promise<number> => {
+    let total = 0;
+    let listing: ReaddirResult;
+    try {
+      listing = await Filesystem.readdir({
+        path: dirPath,
+        directory: Directory.External,
+      });
+    } catch {
+      return 0;
+    }
+    for (const f of listing.files) {
+      const p = `${dirPath}/${f.name}`;
+      if (f.type?.toLowerCase().startsWith("dir")) {
+        total += await dirSize(p);
+      } else {
+        try {
+          const st = await Filesystem.stat({
+            path: p,
+            directory: Directory.External,
+          });
+          total += st.size;
+        } catch {
+          /* unreadable file */
+        }
+      }
+    }
+    return total;
+  };
+
+  for (const entry of root.files) {
+    const isDir =
+      entry.type?.toLowerCase() === "directory" ||
+      entry.type?.toLowerCase() === "dir";
+    if (!isDir || !entry.name) continue;
+    out.set(entry.name, await dirSize(`${SONGS_ROOT}/${entry.name}`));
+  }
+  return out;
+}
+
+/** Delete a song directory (audio, stems, lyrics, practice data). */
+export async function deleteNativeSong(slug: string): Promise<void> {
+  await Filesystem.rmdir({
+    path: `${SONGS_ROOT}/${slug}`,
+    directory: Directory.External,
+    recursive: true,
+  });
+}
+
+/** Create/overwrite a setlist file. */
+export async function saveNativeSetlist(
+  id: string,
+  name: string,
+  songSlugs: string[],
+): Promise<void> {
+  await Filesystem.writeFile({
+    path: `setlists/${id}.json`,
+    directory: Directory.External,
+    encoding: Encoding.UTF8,
+    data: JSON.stringify({ name, songs: songSlugs }, null, 2) + "\n",
+  });
+}
+
+/** Delete a setlist file. */
+export async function deleteNativeSetlist(id: string): Promise<void> {
+  await Filesystem.deleteFile({
+    path: `setlists/${id}.json`,
+    directory: Directory.External,
+  });
+}

@@ -144,6 +144,7 @@ def clean_title(raw: str) -> str:
     from a raw video title, returning just the song name."""
     t = raw.strip()
     t = _strip_noise_groups(t)
+    t = re.sub(r"(?:^|\s)#[^\s\u3000]+", " ", t)  # hashtags (#nokimon etc.)
     m = re.search(r"[「『](.+?)[」』]", t)
     if m:
         t = m.group(1)

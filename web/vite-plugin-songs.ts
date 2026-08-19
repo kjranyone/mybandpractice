@@ -119,6 +119,16 @@ function sendJson(res: ServerResponse, status: number, data: unknown) {
   res.end(JSON.stringify(data));
 }
 
+function walkFiles(dir: string, base = ""): string[] {
+  const out: string[] = [];
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = base ? `${base}/${ent.name}` : ent.name;
+    if (ent.isDirectory()) out.push(...walkFiles(path.join(dir, ent.name), rel));
+    else if (ent.isFile() && !rel.endsWith(".part")) out.push(rel);
+  }
+  return out;
+}
+
 function contentTypeFor(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   switch (ext) {
@@ -150,9 +160,86 @@ function attachMiddleware(
   songsDir: string,
   setlistsDir: string,
 ) {
+  // library root = parent of songs/ (contains songs/ and setlists/)
+  const libRoot = path.dirname(songsDir);
   middlewares.use((req: IncomingMessage, res: ServerResponse, next: Connect.NextFunction) => {
     const rawUrl = req.url ?? "";
     const url = new URL(rawUrl, "http://localhost");
+
+    // ---- P2P sender (web): read-only library access ----
+
+    // GET /api/sync-list?dir=songs  (recursive file listing)
+    if (url.pathname === "/api/sync-list" && req.method === "GET") {
+      const dir = url.searchParams.get("dir") ?? "";
+      const root = safeJoin(libRoot, dir);
+      if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+        sendJson(res, 200, { files: [] });
+        return;
+      }
+      const files = walkFiles(root).map((name) => ({
+        name,
+        bytes: fs.statSync(path.join(root, ...name.split("/"))).size,
+      }));
+      sendJson(res, 200, { files });
+      return;
+    }
+
+    // GET/HEAD/PUT/DELETE /api/sync-file?path=songs/<slug>/x.mp3
+    if (url.pathname === "/api/sync-file") {
+      const rel = url.searchParams.get("path") ?? "";
+      const p = safeJoin(libRoot, rel);
+      if (!p) {
+        res.statusCode = 400;
+        res.end();
+        return;
+      }
+
+      if (req.method === "PUT") {
+        void (async () => {
+          const chunks: Buffer[] = [];
+          for await (const c of req) chunks.push(c as Buffer);
+          fs.mkdirSync(path.dirname(p), { recursive: true });
+          fs.writeFileSync(p, Buffer.concat(chunks));
+          sendJson(res, 200, { ok: true });
+        })();
+        return;
+      }
+
+      if (req.method === "DELETE") {
+        fs.rmSync(p, { force: true });
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (!fs.existsSync(p) || !fs.statSync(p).isFile()) {
+        res.statusCode = 404;
+        res.end();
+        return;
+      }
+      const stat = fs.statSync(p);
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Length", String(stat.size));
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      fs.createReadStream(p).pipe(res);
+      return;
+    }
+
+    // POST /api/sync-rename?from=x&to=y  (publish .part files etc.)
+    if (url.pathname === "/api/sync-rename" && req.method === "POST") {
+      const from = safeJoin(libRoot, url.searchParams.get("from") ?? "");
+      const to = safeJoin(libRoot, url.searchParams.get("to") ?? "");
+      if (!from || !to || !fs.existsSync(from)) {
+        sendJson(res, 404, { error: "not found" });
+        return;
+      }
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.renameSync(from, to);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
 
     // ---- setlists (ordered song lists) ----
     // URL segment is a filesystem-safe id (slug); the display name lives
@@ -239,6 +326,21 @@ function attachMiddleware(
       return;
     }
 
+    // GET /api/storage  (per-song on-disk usage in bytes)
+    if (url.pathname === "/api/storage" && req.method === "GET") {
+      const out: Record<string, number> = {};
+      for (const song of listSongs(songsDir)) {
+        const dir = path.join(songsDir, song.slug);
+        let total = 0;
+        for (const rel of walkFiles(dir)) {
+          total += fs.statSync(path.join(dir, ...rel.split("/"))).size;
+        }
+        out[song.slug] = total;
+      }
+      sendJson(res, 200, out);
+      return;
+    }
+
     // GET /api/songs.json  (static-file variant for Capacitor builds)
     if (url.pathname === "/api/songs.json") {
       sendJson(res, 200, listSongs(songsDir));
@@ -251,10 +353,26 @@ function attachMiddleware(
       return;
     }
 
-    // GET /api/songs/:slug
+    // GET/DELETE /api/songs/:slug
     const songMatch = url.pathname.match(/^\/api\/songs\/([^/]+)$/);
     if (songMatch) {
       const slug = decodeURIComponent(songMatch[1]);
+
+      if (req.method === "DELETE") {
+        const dir = safeJoin(songsDir, slug);
+        if (
+          !dir ||
+          !fs.existsSync(dir) ||
+          !fs.statSync(dir).isDirectory()
+        ) {
+          sendJson(res, 404, { error: "Song not found" });
+          return;
+        }
+        fs.rmSync(dir, { recursive: true, force: true });
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
       const songs = listSongs(songsDir);
       const song = songs.find((s) => s.slug === slug);
       if (!song) {
