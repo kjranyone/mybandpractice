@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SongChordsData, BarSegment, BarChord } from "../utils/chordStore";
-import { transposeChord } from "../utils/chordStore";
+import { transposeChord, analyzeDiatonic } from "../utils/chordStore";
 import type { SongSummary } from "../types";
 import { formatTimePrecise } from "../utils/format";
 import { Modal } from "./Modal";
@@ -188,6 +188,18 @@ export function ChordSheetModal({
     return transposeChord(chordsData.key, pitch);
   }, [chordsData?.key, pitch]);
 
+  const diatonic = useMemo(() => {
+    if (!displayKey) return null;
+    const table = new Map<string, { isDiatonic: boolean; roman: string | null }>();
+    for (const b of bars) {
+      for (const c of b.chords) {
+        const t = transposeChord(c.chord, pitch);
+        if (!table.has(t)) table.set(t, analyzeDiatonic(t, displayKey));
+      }
+    }
+    return table;
+  }, [bars, displayKey, pitch]);
+
   return (
     <Modal
       title={`🎸 ${song?.title ?? "Chord Sheet"}`}
@@ -216,6 +228,16 @@ export function ChordSheetModal({
             )}
             <span className="chip mono">4/4 拍子 (4小節/段)</span>
             <span className="chip mono">{bars.length} 小節</span>
+            {displayKey && (
+              <>
+                <span className="chip chip-diatonic" title="キーの音階に含まれるコード">
+                  <span className="legend-dot dot-diatonic" /> ダイアトニック
+                </span>
+                <span className="chip chip-nondiatonic" title="キー外 (借用コード・セカンダリードミナント等)">
+                  <span className="legend-dot dot-nondiatonic" /> 非ダイアトニック
+                </span>
+              </>
+            )}
           </div>
 
           <div className="chord-sheet-controls">
@@ -305,6 +327,7 @@ export function ChordSheetModal({
                               const chordKey = `${b.bar_number}-${c.start}`;
                               const isCurrentChord = chordKey === activeChordKey || (isCurrentBar && b.chords.length === 1);
                               const transposed = transposeChord(c.chord, pitch);
+                              const dia = diatonic?.get(transposed);
                               const isNc = c.chord === "N.C." || c.chord === "--" || c.chord === "X";
                               const flexRatio = Math.max(1, c.beats);
 
@@ -313,12 +336,17 @@ export function ChordSheetModal({
                                   key={`ch-${cIdx}-${c.start}`}
                                   type="button"
                                   style={{ flex: flexRatio }}
-                                  className={`lead-chord-btn${isCurrentChord ? " is-active-chord" : ""}${c.is_dominant ? " is-dominant" : ""}${isNc ? " is-nc" : ""}`}
+                                  className={`lead-chord-btn${isCurrentChord ? " is-active-chord" : ""}${c.is_dominant ? " is-dominant" : ""}${isNc ? " is-nc" : ""}${!isNc && dia?.isDiatonic ? " is-diatonic" : ""}${!isNc && dia && !dia.isDiatonic ? " is-nondiatonic" : ""}`}
                                   onClick={() => onSeek(c.start)}
-                                  title={`${transposed} (${c.beats}拍, ${formatTimePrecise(c.start)}) — クリックでシーク`}
+                                  title={`${transposed}${dia?.roman ? ` [${dia.roman}]` : ""}${dia && !dia.isDiatonic ? " (非ダイアトニック)" : ""} (${c.beats}拍, ${formatTimePrecise(c.start)}) — クリックでシーク`}
                                 >
                                   <ChordSymbolDisplay chord={transposed} />
                                   <div className="lead-chord-sub">
+                                    {dia?.roman && (
+                                      <span className={`lead-chord-degree mono${dia.isDiatonic ? "" : " is-nd"}`}>
+                                        {dia.roman}
+                                      </span>
+                                    )}
                                     {c.role && <span className="lead-chord-role mono">{c.role}</span>}
                                     {b.chords.length > 1 && (
                                       <span className="lead-chord-beats mono">
