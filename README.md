@@ -33,7 +33,18 @@
 - **取り込み時実行**: `yt-to-mp3.py --stems` でダウンロードと同時に分離
 - **マルチ GPU 対応**: NVIDIA CUDA / Intel Arc XPU (VRAM ガード付きの明示指定) / AMD ROCm (Linux では `--device cuda` で動作) / CPU
 
-### 📱 5. Android デプロイ & 同期 (`bin/sync.ps1`)
+### 🎼 5. AI コード解析 & リードシート (`bin/analyze-chords.py`)
+- **ステム活用のニューラルコード推定**: BTC Transformer (ISMIR19, 170クラス大語彙モデル) で bass + other ステムから高精度にコードを推定 (ボーカルのフォルマント/ビブラートやシンバルノイズを排除)
+- **スラッシュコード検出**: bass ステムの低音 (C1-C3) クロマから転回形 (例: `G#/B`) を検出
+- **音楽理論ポストプロセッサ**: ドミナント モーション (V7→I)、II-V-I ケイデンス検出・ラベリング、非和声音的な一過性グリッチの除去
+- **ドラム駆動のビート/小節構造検出**:
+  - テンポはドラムステムの prior-free tempogram から候補生成し、拍の規則性×オンセット強度で選択 (yt-dlp 由来音源の数% ズレにも追従)
+  - メーター (3/4 or 4/4) はキック/スネア パターンの周期性から決定
+  - ダウンビートは段階的に決定: ①キック (1&3拍) / スネア (2&4拍) のヒット率で偶奇位相を確定 → ②ハーモニックリズム (コード変化の小節頭整列) + クラッシュシンバル残響 (高域持続エネルギー) で p vs p+2 を解決
+- **検証済み BPM オーバーライド**: 公式 BPM が判明している曲は `BPM_OVERRIDES` (スクリプト内定数) で確定可能
+- **リードシートビューア** (Web プレイヤー統合): 4小節/段の楽譜レイアウト、再生位置連動ハイライト・自動スクロール、クリックシーク、**ダイアトニック配色** (キー内コード=青 / 借用コード=ローズ) とローマ数字度数表示、ピッチシフター連動の移調表示
+
+### 📱 6. Android デプロイ & 同期 (`bin/sync.ps1`)
 - ADB 経由での Android タブレット/スマホへの APK インストール & `songs/` 音源の自動同期
 
 ---
@@ -45,16 +56,19 @@ mybandpractice/
 ├── bin/
 │   ├── yt-to-mp3.py        # 音量ノーマライズ付き MP3 抽出スクリプト
 │   ├── separate-stems.py   # 4 ステム分離 (BS-RoFormer)
+│   ├── analyze-chords.py   # ステム活用 AI コード解析 (BTC Transformer)
 │   ├── fetch-lyrics.py     # config.yaml 駆動の歌詞フェッチャー
 │   └── sync.ps1            # Android 実機デプロイ & 音源同期スクリプト
 ├── config.example.yaml     # 歌詞フェッチャー等の設定テンプレート
 ├── pyproject.toml          # uv による Python 環境定義 (torch XPU ビルド)
+├── tools/btc/              # BTC-ISMIR19 クローン (初回実行時に自動クローン, Git除外)
 ├── tools/msst/             # Music-Source-Separation-Training クローン (Git除外)
 ├── models/                 # 分離モデルのチェックポイント (Git除外)
 ├── songs/                  # ローカル音源・歌詞ストレージ (Git除外)
 │   └── <song-slug>/
 │       ├── <song-slug>.mp3
 │       ├── stems/          # vocals / drums / bass / other の mp3
+│       ├── chords.json     # コード解析結果 (キー/BPM/小節/ケイデンス)
 │       ├── meta.json
 │       └── lyrics.md
 └── web/                    # React + Vite + TypeScript プレイヤー Web アプリ
@@ -223,7 +237,54 @@ uv run python bin/fetch-lyrics.py
 uv run python bin/fetch-lyrics.py <song-slug>
 ```
 
-### 6. Android 実機へのデプロイ (`sync.ps1`)
+### 6. AI コード解析 (`analyze-chords.py`)
+
+ステム音源 (bass + other + drums) を活用してコード進行・キー・BPM・小節構造を解析し、`songs/<slug>/chords.json` に保存します。Web プレイヤーのリードシートビューアで表示されます。
+
+#### パイプライン
+
+1. **モデル取得**: BTC-ISMIR19 (Transformer ベース コード認識, ISMIR19) を `tools/btc/` に自動クローン (PyYAML/NumPy 互換パッチ適用済み)
+2. **テンポ/ビート検出** (ドラムステム): prior-free tempogram の強ビンから候補生成 → 拍の規則性×オンセット強度でスコアリング → オクターブ関係は遅い方 (4分音符レベル) を優遇 → 実際の拍間隔から BPM を精密化
+3. **メーター/ダウンビート検出**: ①キック (<120Hz) = 1&3拍 / スネア (180-500Hz) = 2&4拍 のヒット率で偶奇位相を確定 → ②残った p vs p+2 をコード変化位置の整列とクラッシュシンバル (6kHz+ の持続成分) の残響で決定
+4. **コード推定**: bass + other を混合した CQT を BTC に入力し 170 クラスのコードを推定。bass ステム低域クロマでスラッシュコード (転回形) も検出
+5. **音楽理論ポストプロセッサ**: ドミナント モーション (V7→I) の品質補正、II-V-I ケイデンスの検出・ラベリング、0.3 秒未満の非和声音グリッチ除去
+6. **小節構造化**: 検出したダウンビート位相に合わせて拍を小節に割り付け、拍数比例でコードを配置し `chords.json` に保存
+
+#### 使い方
+
+```bash
+# 特定の曲を解析 (ステム分離済みであること)
+uv run python bin/analyze-chords.py <song-slug>
+
+# 全曲を一括解析 (PowerShell)
+Get-ChildItem songs -Directory | ForEach-Object { uv run python bin/analyze-chords.py $_.Name }
+```
+
+出力例:
+
+```
+==> analyzing chords for 'tiger-punch' with BTC Transformer + Music Theory Engine ...
+    [3/6] beat, tempo & downbeat tracking ...
+      tempo candidates: [92.3, ...] -> selected 143.6 BPM, 582 beats
+      phase voting: m4p2=... (dEven=0.81 dOdd=0.79 ...)
+      meter: 4/4, downbeat phase: 2
+==> analysis complete in 6.4s: structured 148 bars (152 chords).
+```
+
+#### テンポ判定の信頼性
+
+テンポのオクターブ ambiguities (倍/半分) は音声のみからの解決が本質的に難しいため、公式 BPM が判明している曲はスクリプト内の `BPM_OVERRIDES` に記述すると確定値で解析できます (tunebat / バンドスコア等の出典コメント付き)。また YouTube 音源には意図的に ±3% 程度ピッチ/テンポをずらしたアップロードが存在するため、グリッドは公式値ではなく実際の音源に整合するよう拍間隔から精密化されます。
+
+`chords.json` の構造:
+
+| フィールド | 説明 |
+|---|---|
+| `key` / `key_confidence` | Krumhansl-Schmuckler プロファイルによる推定キー |
+| `bpm` / `time_signature` | テンポと拍子 |
+| `bars[]` | 小節ごとの `bar_number` / `start` / `end` / `cadence` / `chords[]` |
+| `chords[]` | 時刻付きのコード セグメント列 |
+
+### 7. Android 実機へのデプロイ (`sync.ps1`)
 
 APK ビルド & インストール、および `songs/`・`setlists/` の端末への同期を行います。
 
