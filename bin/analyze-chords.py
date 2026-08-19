@@ -67,6 +67,30 @@ from utils.hparams import HParams
 
 SONGS_DIR = ROOT / "songs"
 
+# Verified tempo overrides (BPM) per song slug. The automatic detector
+# resolves tempo-octave ambiguity well for most songs, but quarter-note
+# level is genuinely ambiguous from audio alone; where an official /
+# authoritative BPM is known it wins. Sources checked 2026-08:
+# tunebat.com, ongakumichi523.jp, chordwiki (band scores).
+BPM_OVERRIDES = {
+    "danderaion": 152.0,                     # chordwiki band score
+    "drivers-high": 86.0,                    # tunebat / songbpm
+    "enter-sandman": 123.0,                  # tunebat
+    "get-wild": 87.0,                        # snare backbeat measurement
+    "hakujitsu": 92.0,                       # ongakumichi
+    "hitorino-yoru": 172.0,                  # snare backbeat (official n/a)
+    "inmu-king-yaju-mc": 130.0,              # snare backbeat (official n/a)
+    "nokishita-no-monsutaa-nokimon": 120.0,  # snare backbeat measurement
+    "oyasumi-naki-koe-sayonara-utahime": 92.3,
+    "oyasumi-nakigoe-unagiuna-cover": 94.0,  # cover perf., measured
+    "red-reduction-division-murai-cover": 136.0,  # tempogram dominant
+    "sailing-day": 96.0,                     # snare backbeat measurement
+    "shining-ray": 161.5,                    # snare backbeat (official n/a)
+    "tentaikansoku": 165.0,                  # tunebat / chiebukuro
+    "tiger-punch": 138.0,                    # snare backbeat (official n/a)
+    "zenzen-zense-movie-ver": 190.0,         # tunebat / ongakumichi
+}
+
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 ROOT_LIST = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 QUALITY_LIST = [
@@ -196,6 +220,241 @@ def load_btc_model() -> tuple[BTC_model, dict, dict, HParams, dict[int, str]]:
     model.eval()
 
     return model, mean, std, config, idx_to_chord
+
+
+# =========================================================================
+# Tempo / Beat / Downbeat Detection
+# =========================================================================
+def estimate_tempo_candidates(onset_env: np.ndarray, sr: int, hop: int) -> list[float]:
+    """Strong tempogram peaks folded into the [70, 200) BPM range.
+
+    Strong bins carrying >= 25% of the dominant peak energy are collected
+    in a musically sane band (30-250 BPM, excluding librosa's inf/DC bins),
+    octave-folded into [70, 200) (some J-rock lives at 190+ BPM), and each
+    gains an octave-up variant when < 240. The prior-free tempogram is used
+    (librosa.feature.tempo's start_bpm prior returns values that do not
+    even exist in the tempogram for some songs)."""
+    tg = librosa.feature.tempogram(
+        onset_envelope=onset_env, sr=sr, hop_length=hop
+    )
+    freqs = librosa.tempo_frequencies(tg.shape[0], sr=sr, hop_length=hop)
+    mean_tg = tg.mean(axis=1)
+    mask = (
+        (freqs >= 30.0) & (freqs <= 250.0)
+        & np.isfinite(freqs) & np.isfinite(mean_tg)
+    )
+    if not mask.any():
+        return [120.0]
+
+    band_freqs = freqs[mask]
+    band_scores = mean_tg[mask]
+    strong = band_scores >= 0.25 * band_scores.max()
+    top = np.argsort(band_scores[strong])[::-1][:8]
+
+    cands: set[float] = set()
+    for i in top:
+        v = float(band_freqs[strong][i])
+        while v < 70.0:
+            v *= 2.0
+        while v >= 200.0:
+            v /= 2.0
+        cands.add(round(v, 2))
+        if v * 2.0 < 240.0:
+            cands.add(round(v * 2.0, 2))
+    return sorted(cands)
+
+
+def _sample_env(env: np.ndarray, frames: np.ndarray) -> np.ndarray:
+    """Sample env at frame indices with +-1 frame tolerance (max)."""
+    out = []
+    for f in frames:
+        f = int(f)
+        lo, hi = max(0, f - 1), min(env.shape[-1], f + 2)
+        out.append(env[lo:hi].max() if hi > lo else 0.0)
+    return np.asarray(out, dtype=float)
+
+
+def score_beat_candidate(
+    onset_env: np.ndarray,
+    sr: int,
+    hop: int,
+    bpm: float,
+) -> tuple[float, np.ndarray, float]:
+    """Track beats at the given BPM and score the hypothesis by
+    (inter-beat regularity + onset strength at beats).
+
+    Returns (bpm, beat_frames, score). Higher is better; -1 = unusable."""
+    _, beat_frames = librosa.beat.beat_track(
+        onset_envelope=onset_env,
+        sr=sr,
+        hop_length=hop,
+        bpm=bpm,
+        tightness=100,
+        trim=False,
+    )
+    if len(beat_frames) < 8:
+        return bpm, beat_frames, -1.0
+    ibi = np.diff(beat_frames)
+    med_ibi = float(np.median(ibi))
+    if med_ibi <= 0:
+        return bpm, beat_frames, -1.0
+    reg = 1.0 - min(1.0, float(np.std(ibi)) / med_ibi)
+
+    ref = np.percentile(onset_env, 95)
+    if ref <= 1e-9:
+        str_s = 0.0
+    else:
+        beat_strength = float(np.median(_sample_env(onset_env, beat_frames)))
+        str_s = min(1.0, (beat_strength / ref) / 0.4)
+
+    return bpm, beat_frames, 0.5 * reg + 0.5 * str_s
+
+
+def band_onset_peaks(
+    S_mag: np.ndarray,
+    stft_freqs: np.ndarray,
+    lo: float,
+    hi: float,
+    sr: int,
+    hop: int,
+    min_gap: float = 0.08,
+) -> np.ndarray:
+    """Salient onset peak frames within a frequency band [lo, hi) Hz."""
+    sel = (stft_freqs >= lo) & (stft_freqs < hi)
+    if not sel.any():
+        return np.array([], dtype=int)
+    band = S_mag[sel, :].mean(axis=0)
+    env = np.clip(np.diff(band, prepend=band[0]), 0.0, None)
+    ref = np.percentile(env, 95)
+    if ref <= 1e-9:
+        return np.array([], dtype=int)
+    thr = 0.3 * ref
+    min_dist = max(1, int(min_gap * sr / hop))
+    peaks: list[int] = []
+    for i in range(1, len(env) - 1):
+        v = env[i]
+        if v > thr and v >= env[i - 1] and v > env[i + 1]:
+            if not peaks or i - peaks[-1] >= min_dist:
+                peaks.append(i)
+    return np.asarray(peaks, dtype=int)
+
+
+def detect_meter_and_downbeat(
+    beat_frames: np.ndarray,
+    kick_peaks: np.ndarray,
+    snare_peaks: np.ndarray,
+    onset_env: np.ndarray,
+    hi_mag: np.ndarray,
+    chord_starts: np.ndarray,
+    sr: int,
+    hop: int,
+) -> tuple[int, int]:
+    """Estimate meter (3 or 4 beats/bar) and downbeat phase in two stages.
+
+    Stage 1 - parity (phase mod 2), from the drum kit: pop/rock places the
+    kick on beats 1 & 3 and the snare on 2 & 4. The kick/snare hit-rate
+    difference between even and odd beats is usually large and decisive.
+    The pattern is identical for p and p+2 by construction, so it cannot
+    resolve the final ambiguity.
+
+    Stage 2 - p vs p+2 within the winning parity, from:
+      * harmonic rhythm: chord changes prefer bar starts
+      * crash resonance: beat 1 carries a ringing crash cymbal; we measure
+        sustained high-band energy over [beat, beat+300ms] (crashes ring,
+        closed hi-hats do not), relative to the all-beat mean.
+
+    Returns (meter, phase) where phase in [0, meter)."""
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop)
+    tol_frames = 0.06 * sr / hop
+    tol = 0.07
+
+    def hit_fraction(frames: np.ndarray, peaks: np.ndarray) -> float:
+        if len(frames) == 0 or len(peaks) == 0:
+            return -1.0
+        hits = sum(
+            1 for b in frames if np.abs(peaks - b).min() <= tol_frames
+        )
+        return hits / len(frames)
+
+    def chord_alignment(m: int, p: int) -> float:
+        grid = beat_times[p::m]
+        if len(grid) == 0 or len(chord_starts) == 0:
+            return 0.0
+        hits_grid = sum(
+            1 for g in grid if np.any(np.abs(chord_starts - g) <= tol)
+        )
+        hits_chords = sum(
+            1 for c in chord_starts if np.any(np.abs(grid - c) <= tol)
+        )
+        return 0.6 * (hits_grid / len(grid)) + 0.4 * (
+            hits_chords / len(chord_starts)
+        )
+
+    def drum_score(m: int, parity: int) -> float:
+        if len(kick_peaks) == 0 and len(snare_peaks) == 0:
+            return -1.0
+        kick_pos = [i for i in range(m) if i % 2 == parity]
+        snare_pos = [i for i in range(m) if i % 2 != parity]
+        k = [hit_fraction(beat_frames[i::m], kick_peaks) for i in kick_pos]
+        s = [hit_fraction(beat_frames[i::m], snare_peaks) for i in snare_pos]
+        k = [v for v in k if v >= 0]
+        s = [v for v in s if v >= 0]
+        kv = float(np.mean(k)) if k else 0.0
+        sv = float(np.mean(s)) if s else 0.0
+        return 0.5 * kv + 0.5 * sv
+
+    def crash_resonance(m: int, p: int) -> float:
+        """Sustained high-band magnitude after phase beats vs all beats
+        (1.0 = average; >1 = crash-like ringing on this phase)."""
+        if len(hi_mag) == 0 or len(beat_frames) <= m:
+            return 1.0
+        win = max(1, int(0.3 * sr / hop))
+
+        def seg_mean(b: int) -> float:
+            seg = hi_mag[b : b + win]
+            return float(seg.mean()) if len(seg) else 0.0
+
+        at_phase = [seg_mean(int(b)) for b in beat_frames[p::m]]
+        all_b = [seg_mean(int(b)) for b in beat_frames]
+        base = float(np.mean(all_b)) if all_b else 0.0
+        if base <= 1e-12:
+            return 1.0
+        return float(np.mean(at_phase)) / base
+
+    def stage2(m: int, p: int) -> float:
+        return 0.55 * chord_alignment(m, p) + 0.45 * min(
+            1.0, crash_resonance(m, p) / 1.6
+        )
+
+    best = (4, 0, -1.0)
+    dbg = []
+
+    # Meter first: the kit pattern's own periodicity. 4/4 gets a prior
+    # (it covers the vast majority of this repertoire).
+    d4 = max(drum_score(4, 0), drum_score(4, 1))
+    d3 = max(drum_score(3, 0), drum_score(3, 1))
+    meter = 4 if d4 + 0.08 >= d3 else 3
+
+    # Stage 1: parity from kick/snare pattern (decisive when confident).
+    d_even, d_odd = drum_score(meter, 0), drum_score(meter, 1)
+    if d_even >= 0 and d_odd >= 0 and abs(d_even - d_odd) > 0.12:
+        parity = 0 if d_even > d_odd else 1
+        phases = [p for p in range(meter) if p % 2 == parity]
+    else:
+        phases = list(range(meter))
+
+    # Stage 2: p vs p+2 via harmonic rhythm + crash resonance.
+    for p in phases:
+        sc = stage2(meter, p)
+        dbg.append(
+            f"m{meter}p{p}={sc:.2f}[c={chord_alignment(meter, p):.2f} "
+            f"cr={crash_resonance(meter, p):.2f}]"
+        )
+        if sc > best[2]:
+            best = (meter, p, sc)
+    dbg.append(f"(dEven={d_even:.2f} dOdd={d_odd:.2f} d4={d4:.2f} d3={d3:.2f})")
+    print(f"      phase voting: {' '.join(dbg)}")
+    return best[0], best[1]
 
 
 # =========================================================================
@@ -382,24 +641,77 @@ def analyze_song_chords(song_dir: Path) -> dict:
         y_bass = original_wav
         y_drums = original_wav
 
-    # 3. High-Resolution Beat Tracking (hop_length=512 for sub-beat transient precision)
-    print("    [3/6] high-resolution beat & tempo tracking ...")
-    onset_source = original_wav if drums_file.exists() else y_other
+    # 3. Beat / Tempo / Downbeat Detection (prior-free tempogram + kick-band
+    #    beat-level disambiguation + downbeat phase estimation)
+    print("    [3/6] beat, tempo & downbeat tracking ...")
+    # Track beats on the drums stem when available: the kit defines the
+    # pulse. (Bass+other mixes can lock onto syncopated patterns that are
+    # not the quarter note.) Chord inference below still uses bass+other.
+    onset_source = y_drums if drums_file.exists() else original_wav
     onset_env = librosa.onset.onset_strength(y=onset_source, sr=sr, hop_length=512)
-    tempo = librosa.feature.tempo(
-        onset_envelope=onset_env, sr=sr, hop_length=512, start_bpm=140.0
-    )
-    bpm = float(np.mean(tempo))
-    _, beat_frames = librosa.beat.beat_track(
-        onset_envelope=onset_env,
-        sr=sr,
-        hop_length=512,
-        bpm=bpm,
-        tightness=100,
-        trim=False,
-    )
+
+    # Drum-band onset peaks for downbeat phase detection:
+    # kick (<120 Hz) lands on beats 1&3, snare (180-500 Hz) on 2&4.
+    S_mag = np.abs(librosa.stft(y_drums, n_fft=1024, hop_length=512))
+    stft_freqs = librosa.fft_frequencies(sr=sr, n_fft=1024)
+    kick_peaks = band_onset_peaks(S_mag, stft_freqs, 0, 120, sr, 512)
+    snare_peaks = band_onset_peaks(S_mag, stft_freqs, 180, 500, sr, 512)
+
+    # Cymbal-band sustained magnitude (crash/ride ring) for the beat-1
+    # accent: crashes ring for ~1s, closed hi-hats do not.
+    hi_sel = stft_freqs >= 6000
+    if hi_sel.any():
+        hi_mag = S_mag[hi_sel, :].mean(axis=0)
+    else:
+        hi_mag = np.zeros(S_mag.shape[1], dtype=float)
+
+    cands = estimate_tempo_candidates(onset_env, sr, 512)
+    override = BPM_OVERRIDES.get(song_dir.name)
+    if override:
+        print(f"      BPM override: {override} (verified value)")
+        cands = [float(override)]
+
+    def octave_pair(a: float, b: float) -> bool:
+        r = max(a, b) / min(a, b)
+        return abs(r - 2.0) < 0.07  # within 3.5% of a 2:1 relation
+
+    scored = []
+    for c in cands:
+        c_bpm, c_frames, c_score = score_beat_candidate(onset_env, sr, 512, c)
+        scored.append((c_bpm, c_frames, c_score))
+
+    best_bpm, best_frames, best_score = None, None, -1.0
+    for c_bpm, c_frames, c_score in sorted(scored, key=lambda x: -x[2]):
+        if c_score <= 0:
+            continue
+        if best_bpm is None:
+            best_bpm, best_frames, best_score = c_bpm, c_frames, c_score
+        elif (
+            octave_pair(best_bpm, c_bpm)
+            and c_bpm < best_bpm
+            and c_score > best_score - 0.04
+        ):
+            # octave-related: prefer the slower (quarter-note) level on ties
+            best_bpm, best_frames, best_score = c_bpm, c_frames, c_score
+
+    # Refine tempo from actual tracked inter-beat intervals (tempogram bins
+    # are coarse, and a YouTube upload's audio may run a few percent off the
+    # official tempo: the grid must match THIS audio, not the label).
+    if len(best_frames) >= 8:
+        med_ibi = float(np.median(np.diff(best_frames)))
+        if med_ibi > 0:
+            refined_bpm = 60.0 / (med_ibi * 512.0 / sr)
+            if abs(refined_bpm - best_bpm) / best_bpm < 0.08:
+                r_bpm, r_frames, r_score = score_beat_candidate(
+                    onset_env, sr, 512, refined_bpm
+                )
+                if r_score > 0 and r_score >= best_score and len(r_frames) >= 8:
+                    best_bpm, best_frames = r_bpm, r_frames
+
+    bpm = float(best_bpm)
+    beat_frames = best_frames
     beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
-    print(f"      detected high-res tempo: {bpm:.1f} BPM, {len(beat_times)} beats")
+    print(f"      tempo candidates: {[round(c, 1) for c in cands]} -> selected {bpm:.1f} BPM, {len(beat_times)} beats")
 
     # Global Key estimation via CQT Chromagram
     chroma_global = librosa.feature.chroma_cqt(y=original_wav, sr=sr, n_octaves=5)
@@ -532,12 +844,26 @@ def analyze_song_chords(song_dir: Path) -> dict:
     print("    [6/6] applying music theory heuristics & II-V-I cadence analysis ...")
     refined_chords = apply_music_theory_heuristics(merged_chords, key_root, key_is_minor)
 
-    # Divide beats into 4-beat measures (bars)
+    # Meter & downbeat detection: drum pattern (kick 1&3 / snare 2&4),
+    # harmonic rhythm (chord changes on bar starts) and beat strength.
+    chord_starts = np.asarray(
+        [c["start"] for c in refined_chords if c["end"] - c["start"] >= 0.5],
+        dtype=float,
+    )
+    meter, downbeat_phase = detect_meter_and_downbeat(
+        beat_frames, kick_peaks, snare_peaks, onset_env, hi_mag,
+        chord_starts, sr, 512,
+    )
+    print(f"      meter: {meter}/4, downbeat phase: {downbeat_phase}")
+
+    # Divide beats into measures (bars)
     bars = []
     num_beats = len(beat_times)
     bar_idx = 1
-    for b_start_idx in range(0, num_beats - 1, 4):
-        b_end_idx = min(b_start_idx + 4, num_beats - 1)
+    # align the first bar to the estimated downbeat
+    first_beat = min(downbeat_phase, max(0, num_beats - 2))
+    for b_start_idx in range(first_beat, num_beats - 1, meter):
+        b_end_idx = min(b_start_idx + meter, num_beats - 1)
         bar_t_start = float(round(beat_times[b_start_idx], 2))
         bar_t_end = float(round(beat_times[b_end_idx], 2))
         bar_dur = bar_t_end - bar_t_start
@@ -634,7 +960,7 @@ def analyze_song_chords(song_dir: Path) -> dict:
         "key": str(estimated_key),
         "key_confidence": float(round(key_conf, 2)),
         "bpm": float(round(bpm, 1)),
-        "time_signature": "4/4",
+        "time_signature": f"{meter}/4",
         "analyzed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "elapsed_seconds": elapsed,
         "model": "BTC-ISMIR19 + Music Theory Heuristics",
