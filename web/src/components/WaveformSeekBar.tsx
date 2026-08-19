@@ -34,6 +34,7 @@ type Props = {
   onMarkerAdd: (time: number, label: string) => void;
   onMarkerUpdate: (id: string, patch: Partial<Pick<SongMarker, "time" | "label">>) => void;
   onMarkerRemove: (id: string) => void;
+  rightSlot?: React.ReactNode;
 };
 
 type MarkerEditor = {
@@ -65,6 +66,7 @@ export function WaveformSeekBar({
   onMarkerAdd,
   onMarkerUpdate,
   onMarkerRemove,
+  rightSlot,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [barCount, setBarCount] = useState(220);
@@ -409,7 +411,10 @@ export function WaveformSeekBar({
             {formatTimePrecise(hoverTime)}
           </span>
         )}
-        <span className="mono muted">{formatTimePrecise(duration)}</span>
+        <div className="waveform-times-right">
+          <span className="mono muted">{formatTimePrecise(duration)}</span>
+          {rightSlot}
+        </div>
       </div>
 
       <div

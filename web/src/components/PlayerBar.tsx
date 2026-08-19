@@ -8,6 +8,7 @@ import {
 import type { SongMarker } from "../hooks/useMarkers";
 import type { SongSummary } from "../types";
 import { clamp, formatTimePrecise } from "../utils/format";
+import { toLeadSheetNotation } from "../utils/chordStore";
 import { Modal } from "./Modal";
 import { SpeedControl } from "./SpeedControl";
 import { StemFader } from "./StemFader";
@@ -32,6 +33,10 @@ type Props = {
   pitch: number;
   onPitch: (semitones: number) => void;
   markers: SongMarker[];
+  currentChord?: string | null;
+  hasChords?: boolean;
+  chordSheetOpen?: boolean;
+  onToggleChordSheet?: () => void;
   onMarkerAdd: (time: number, label: string) => void;
   onMarkerUpdate: (
     id: string,
@@ -72,6 +77,10 @@ export function PlayerBar({
   pitch,
   onPitch,
   markers,
+  currentChord,
+  hasChords,
+  chordSheetOpen,
+  onToggleChordSheet,
   onMarkerAdd,
   onMarkerUpdate,
   onMarkerRemove,
@@ -123,6 +132,28 @@ export function PlayerBar({
         onMarkerAdd={onMarkerAdd}
         onMarkerUpdate={onMarkerUpdate}
         onMarkerRemove={onMarkerRemove}
+        rightSlot={
+          <button
+            type="button"
+            className={`chord-toggle mono${chordSheetOpen ? " is-active" : ""}${currentChord ? " has-chord" : ""}`}
+            onClick={onToggleChordSheet}
+            disabled={disabled}
+            aria-haspopup="dialog"
+            aria-expanded={chordSheetOpen}
+            aria-label="Toggle chord sheet"
+            title={
+              currentChord
+                ? `Current Chord: ${toLeadSheetNotation(currentChord)} (Click to open Chord Sheet)`
+                : hasChords
+                  ? "Open Chord Sheet"
+                  : "No chords data"
+            }
+          >
+            <span className="chord-name">
+              {currentChord ? toLeadSheetNotation(currentChord) : (hasChords ? "Chord" : "--")}
+            </span>
+          </button>
+        }
       />
 
       {/* Row 2: transport + loop + mixer entry */}
