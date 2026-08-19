@@ -15,6 +15,8 @@ import { StemFader } from "./StemFader";
 import { VolumeFader } from "./VolumeFader";
 import { WaveformSeekBar } from "./WaveformSeekBar";
 
+const PITCH_PRESETS = [-5, -2, -1, 0, 1, 2, 5];
+
 type Props = {
   song: SongSummary | null;
   playing: boolean;
@@ -132,28 +134,6 @@ export function PlayerBar({
         onMarkerAdd={onMarkerAdd}
         onMarkerUpdate={onMarkerUpdate}
         onMarkerRemove={onMarkerRemove}
-        rightSlot={
-          <button
-            type="button"
-            className={`chord-toggle mono${chordSheetOpen ? " is-active" : ""}${currentChord ? " has-chord" : ""}`}
-            onClick={onToggleChordSheet}
-            disabled={disabled}
-            aria-haspopup="dialog"
-            aria-expanded={chordSheetOpen}
-            aria-label="Toggle chord sheet"
-            title={
-              currentChord
-                ? `Current Chord: ${toLeadSheetNotation(currentChord)} (Click to open Chord Sheet)`
-                : hasChords
-                  ? "Open Chord Sheet"
-                  : "No chords data"
-            }
-          >
-            <span className="chord-name">
-              {currentChord ? toLeadSheetNotation(currentChord) : (hasChords ? "Chord" : "--")}
-            </span>
-          </button>
-        }
       />
 
       {/* Row 2: transport + loop + mixer entry */}
@@ -311,69 +291,91 @@ export function PlayerBar({
           </div>
         </div>
 
-        <button
-          type="button"
-          className={`mixer-toggle mono${mixerOpen ? " is-active" : ""}`}
-          onClick={() => setMixerOpen(true)}
-          aria-haspopup="dialog"
-          aria-expanded={mixerOpen}
-          aria-label="Open mixer"
-          title={`Mixer — speed ${playbackRate.toFixed(2)}×, ${
-            allStemsOn ? "original mix" : `stems: ${touched.join(", ")} attenuated`
-          }, volume ${Math.round((muted ? 0 : volume) * 100)}%`}
-        >
-          <span
-            className={`mx-stat${Math.abs(playbackRate - 1) >= 0.005 ? " is-on" : ""}`}
-          >
-            {playbackRate.toFixed(2).replace(/\.?0+$/, "")}×
-          </span>
-          {pitch !== 0 && (
-            <>
-              <span className="mx-sep" aria-hidden>
-                ·
-              </span>
-              <span
-                className="mx-stat is-on is-pitch"
-                title={`Pitch ${pitch > 0 ? "+" : ""}${pitch} semitones`}
-              >
-                {pitch > 0 ? `+${pitch}` : pitch}st
-              </span>
-            </>
-          )}
-          <span className="mx-sep" aria-hidden>
-            ·
-          </span>
-          <span
-            className={`mx-stat${!allStemsOn ? " is-on is-stem" : ""}`}
+        <div className="deck-side">
+          <button
+            type="button"
+            className={`chord-toggle mono${chordSheetOpen ? " is-active" : ""}${currentChord ? " has-chord" : ""}`}
+            onClick={onToggleChordSheet}
+            disabled={disabled}
+            aria-haspopup="dialog"
+            aria-expanded={chordSheetOpen}
+            aria-label="Toggle chord sheet"
             title={
-              allStemsOn
-                ? "Original mix"
-                : `Stem mix: ${touched.join(", ")} attenuated`
+              currentChord
+                ? `Current Chord: ${toLeadSheetNotation(currentChord)} (Click to open Chord Sheet)`
+                : hasChords
+                  ? "Open Chord Sheet"
+                  : "No chords data"
             }
           >
-            {stemChipLabel}
-          </span>
-          <span className="mx-sep" aria-hidden>
-            ·
-          </span>
-          <span
-            className="mx-vol"
-            role="img"
-            aria-label={
-              muted || volume === 0
-                ? "muted"
-                : `volume ${Math.round(volume * 100)}%`
-            }
+            <span className="chord-name">
+              {currentChord ? toLeadSheetNotation(currentChord) : (hasChords ? "Chord" : "--")}
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`mixer-toggle mono${mixerOpen ? " is-active" : ""}`}
+            onClick={() => setMixerOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={mixerOpen}
+            aria-label="Open mixer"
+            title={`Mixer — speed ${playbackRate.toFixed(2)}×, ${
+              allStemsOn ? "original mix" : `stems: ${touched.join(", ")} attenuated`
+            }, volume ${Math.round((muted ? 0 : volume) * 100)}%`}
           >
             <span
-              className="mx-vol-fill"
-              style={{ width: `${Math.round((muted ? 0 : volume) * 100)}%` }}
-            />
-            <span className="mx-vol-text">
-              {muted || volume === 0 ? "M" : `${Math.round(volume * 100)}`}
+              className={`mx-stat${Math.abs(playbackRate - 1) >= 0.005 ? " is-on" : ""}`}
+            >
+              {playbackRate.toFixed(2).replace(/\.?0+$/, "")}×
             </span>
-          </span>
-        </button>
+            {pitch !== 0 && (
+              <>
+                <span className="mx-sep" aria-hidden>
+                  ·
+                </span>
+                <span
+                  className="mx-stat is-on is-pitch"
+                  title={`Pitch ${pitch > 0 ? "+" : ""}${pitch} semitones`}
+                >
+                  {pitch > 0 ? `+${pitch}` : pitch}st
+                </span>
+              </>
+            )}
+            <span className="mx-sep" aria-hidden>
+              ·
+            </span>
+            <span
+              className={`mx-stat${!allStemsOn ? " is-on is-stem" : ""}`}
+              title={
+                allStemsOn
+                  ? "Original mix"
+                  : `Stem mix: ${touched.join(", ")} attenuated`
+              }
+            >
+              {stemChipLabel}
+            </span>
+            <span className="mx-sep" aria-hidden>
+              ·
+            </span>
+            <span
+              className="mx-vol"
+              role="img"
+              aria-label={
+                muted || volume === 0
+                  ? "muted"
+                  : `volume ${Math.round(volume * 100)}%`
+              }
+            >
+              <span
+                className="mx-vol-fill"
+                style={{ width: `${Math.round((muted ? 0 : volume) * 100)}%` }}
+              />
+              <span className="mx-vol-text">
+                {muted || volume === 0 ? "M" : `${Math.round(volume * 100)}`}
+              </span>
+            </span>
+          </button>
+        </div>
       </div>
 
       {mixerOpen && (
@@ -409,58 +411,83 @@ export function PlayerBar({
                 </section>
               )}
 
-              <section className="mixer-section mixer-pitch">
-                <p className="mixer-section-title">
-                  Pitch
-                  <span className="mixer-section-hint">
-                    {" "}
-                    — semitones, speed unchanged (adds slight latency)
-                  </span>
-                  {pitch !== 0 && (
-                    <button
-                      type="button"
-                      className="stem-all-btn"
-                      onClick={() => onPitch(0)}
-                    >
-                      Reset
-                    </button>
-                  )}
-                </p>
-                <div className="pitch-row">
-                  <span className="mono pitch-bound">−12</span>
-                  <input
-                    type="range"
-                    className="speed-slider pitch-slider"
-                    min={-12}
-                    max={12}
-                    step={1}
-                    value={pitch}
-                    disabled={disabled}
-                    onChange={(e) => onPitch(Number(e.target.value))}
-                    aria-label="Pitch shift (semitones)"
-                    style={
-                      {
-                        "--progress": `${((clamp(pitch, -12, 12) + 12) / 24) * 100}%`,
-                      } as CSSProperties
-                    }
-                  />
-                  <span className="mono pitch-bound">+12</span>
-                  <span
-                    className={`mono pitch-val${pitch !== 0 ? " is-on" : ""}`}
-                  >
-                    {pitch > 0 ? `+${pitch}` : pitch} st
-                  </span>
-                </div>
-              </section>
+              <div className="mixer-controls">
+                <section className="mixer-section mixer-pitch">
+                  <p className="mixer-section-title">
+                    Pitch
+                    <span className="mixer-section-hint">
+                      {" "}
+                      — semitones, speed unchanged (adds slight latency)
+                    </span>
+                    {pitch !== 0 && (
+                      <button
+                        type="button"
+                        className="stem-all-btn"
+                        onClick={() => onPitch(0)}
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </p>
+                  <div className="pitch-control">
+                    <div className="speed-label">
+                      <span className="speed-presets" role="group" aria-label="Pitch presets">
+                        {PITCH_PRESETS.map((p) => (
+                          <button
+                            key={p}
+                            type="button"
+                            className={`speed-chip${pitch === p ? " is-active" : ""}`}
+                            disabled={disabled}
+                            onClick={() => onPitch(p)}
+                          >
+                            {p === 0 ? "0" : `${p > 0 ? "+" : ""}${p}`}
+                          </button>
+                        ))}
+                      </span>
+                      <span
+                        className={`speed-value mono pitch-val${pitch !== 0 ? " is-on" : ""}`}
+                      >
+                        {pitch > 0 ? `+${pitch}` : pitch} st
+                      </span>
+                    </div>
+                    <div className="pitch-row">
+                      <span className="mono pitch-bound">−12</span>
+                      <input
+                        type="range"
+                        className="speed-slider pitch-slider"
+                        min={-12}
+                        max={12}
+                        step={1}
+                        value={pitch}
+                        disabled={disabled}
+                        onChange={(e) => onPitch(Number(e.target.value))}
+                        aria-label="Pitch shift (semitones)"
+                        style={
+                          {
+                            "--progress": `${((clamp(pitch, -12, 12) + 12) / 24) * 100}%`,
+                          } as CSSProperties
+                        }
+                      />
+                      <span className="mono pitch-bound">+12</span>
+                    </div>
+                  </div>
+                </section>
 
-              <div className="mixer-row">
                 <section className="mixer-section mixer-speed">
+                  <p className="mixer-section-title">
+                    Speed
+                    <span className="mixer-section-hint">
+                      {" "}
+                      — audio rate, pitch follows
+                    </span>
+                  </p>
                   <SpeedControl
                     rate={playbackRate}
                     disabled={disabled}
                     onChange={onRate}
                   />
                 </section>
+
                 <section className="mixer-section mixer-volume">
                   <p className="mixer-section-title">Volume</p>
                   <VolumeFader

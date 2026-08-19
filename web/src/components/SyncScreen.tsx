@@ -334,24 +334,26 @@ export function SyncScreen({ onClose, onLibraryChanged }: Props) {
         {phase === "send-offer" && offerPayload && (
           <div className="sync-center">
             <p className="sync-step">Show this code to the other device</p>
-            <QrCanvas payload={offerPayload} className="sync-qr" />
-            {isNative() ? (
-              <button
-                type="button"
-                className="sync-primary"
-                onClick={scanAnswer}
-              >
-                Scan answer code
-              </button>
-            ) : (
-              <QrScanner
-                passive
-                title="Scan the answer code shown on the other device"
-                expect="A"
-                onFound={(d) => void onAnswerFound(d)}
-                onCancel={scanAnswer}
-              />
-            )}
+            <div className="sync-pair">
+              <QrCanvas payload={offerPayload} className="sync-qr" />
+              {isNative() ? (
+                <button
+                  type="button"
+                  className="sync-primary"
+                  onClick={scanAnswer}
+                >
+                  Scan answer code
+                </button>
+              ) : (
+                <QrScanner
+                  passive
+                  title="Scan the answer code shown on the other device"
+                  expect="A"
+                  onFound={(d) => void onAnswerFound(d)}
+                  onCancel={scanAnswer}
+                />
+              )}
+            </div>
           </div>
         )}
 
