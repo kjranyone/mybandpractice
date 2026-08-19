@@ -25,8 +25,9 @@ package-lock.json
 .venv/
 
 # Stem separation models & external tools (large binaries)
-tools/msst/
+tools/
 models/
+scratch/
 
 # Cache & Temporary Files
 .ruff_cache/

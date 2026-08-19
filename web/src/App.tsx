@@ -4,11 +4,14 @@ import { LyricsPanel } from "./components/LyricsPanel";
 import { PlayerBar } from "./components/PlayerBar";
 import { SyncScreen } from "./components/SyncScreen";
 import { ManageSongsModal } from "./components/ManageSongsModal";
+import { ChordSheetModal } from "./components/ChordSheetModal";
 import { nextPlaybackMode, useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMarkers } from "./hooks/useMarkers";
 import { useMediaSession } from "./hooks/useMediaSession";
 import { useLyrics, useSongs } from "./hooks/useSongs";
 import { useSetlists } from "./hooks/useSetlists";
+import { useChords } from "./hooks/useChords";
+import { transposeChord } from "./utils/chordStore";
 import type { SongSummary } from "./types";
 import { deleteNativeSong, isNative } from "./utils/nativeSongs";
 import "./App.css";
@@ -33,6 +36,7 @@ export default function App() {
   const [listOpen, setListOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [chordSheetOpen, setChordSheetOpen] = useState(false);
   const [mode, setMode] = useState<string | null>(() =>
     localStorage.getItem(MODE_KEY),
   );
@@ -72,6 +76,10 @@ export default function App() {
 
   const lyrics = useLyrics(player.current?.slug ?? null);
   const markerState = useMarkers(player.current?.slug ?? null);
+  const chords = useChords(player.current?.slug ?? null, player.currentTime);
+  const currentChordTransposed = chords.currentChord
+    ? transposeChord(chords.currentChord.chord, player.pitch)
+    : null;
 
   // Practice keyboard shortcuts (stable callbacks + latest state via refs)
   const loop = player.loop;
@@ -254,6 +262,10 @@ export default function App() {
         pitch={player.pitch}
         onPitch={player.setPitch}
         markers={markerState.markers}
+        currentChord={currentChordTransposed}
+        hasChords={chords.hasChords}
+        chordSheetOpen={chordSheetOpen}
+        onToggleChordSheet={() => setChordSheetOpen((v) => !v)}
         onMarkerAdd={markerState.addMarker}
         onMarkerUpdate={markerState.updateMarker}
         onMarkerRemove={markerState.removeMarker}
@@ -272,6 +284,19 @@ export default function App() {
         onLoopOut={player.setLoopOut}
         onClearLoop={player.clearLoop}
       />
+      {chordSheetOpen && (
+        <ChordSheetModal
+          song={player.current}
+          chordsData={chords.data}
+          currentTime={player.currentTime}
+          duration={player.duration}
+          playing={player.playing}
+          pitch={player.pitch}
+          onSeek={player.seek}
+          onTogglePlay={() => void player.toggle()}
+          onClose={() => setChordSheetOpen(false)}
+        />
+      )}
       {manageOpen && (
         <ManageSongsModal
           songs={songs}
