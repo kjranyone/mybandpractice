@@ -2,20 +2,37 @@ import { useEffect, useMemo, useState } from "react";
 import { SongList } from "./components/SongList";
 import { LyricsPanel } from "./components/LyricsPanel";
 import { PlayerBar } from "./components/PlayerBar";
+import { SyncScreen } from "./components/SyncScreen";
+import { ManageSongsModal } from "./components/ManageSongsModal";
 import { nextPlaybackMode, useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMarkers } from "./hooks/useMarkers";
 import { useMediaSession } from "./hooks/useMediaSession";
 import { useLyrics, useSongs } from "./hooks/useSongs";
 import { useSetlists } from "./hooks/useSetlists";
+import type { SongSummary } from "./types";
+import { deleteNativeSong, isNative } from "./utils/nativeSongs";
 import "./App.css";
 
 const MODE_KEY = "mbp:mode";
 
+async function deleteSong(song: SongSummary): Promise<void> {
+  if (isNative()) {
+    await deleteNativeSong(song.slug);
+    return;
+  }
+  const res = await fetch(`/api/songs/${encodeURIComponent(song.slug)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Failed to delete (${res.status})`);
+}
+
 export default function App() {
-  const { songs, loading, error } = useSongs();
+  const { songs, loading, error, reload } = useSongs();
   const setlistState = useSetlists();
   const [query, setQuery] = useState("");
   const [listOpen, setListOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [mode, setMode] = useState<string | null>(() =>
     localStorage.getItem(MODE_KEY),
   );
@@ -189,7 +206,6 @@ export default function App() {
       </button>
       <div className="app-body">
         <SongList
-          songs={songs}
           displaySongs={filtered}
           currentSlug={player.current?.slug ?? null}
           playing={player.playing}
@@ -203,11 +219,8 @@ export default function App() {
           onModeChange={setMode}
           setlists={setlistState.setlists}
           activeSetlist={activeSetlist}
-          editable={setlistState.editable}
-          onSaveSetlist={(sl) => void setlistState.save(sl)}
-          onRemoveSetlist={(id) => void setlistState.remove(id)}
-          onCreate={setlistState.create}
           mobileOpen={listOpen}
+          onManageSongs={() => setManageOpen(true)}
         />
         <LyricsPanel
           song={player.current}
@@ -259,6 +272,34 @@ export default function App() {
         onLoopOut={player.setLoopOut}
         onClearLoop={player.clearLoop}
       />
+      {manageOpen && (
+        <ManageSongsModal
+          songs={songs}
+          setlists={setlistState.setlists}
+          onClose={() => setManageOpen(false)}
+          onDeleteSong={deleteSong}
+          onSyncFromPc={() => {
+            setManageOpen(false);
+            setSyncOpen(true);
+          }}
+          onLibraryChanged={() => {
+            void reload();
+            void setlistState.reload();
+          }}
+          onSaveSetlist={setlistState.save}
+          onRemoveSetlist={setlistState.remove}
+          onCreateSetlist={setlistState.create}
+        />
+      )}
+      {syncOpen && (
+        <SyncScreen
+          onClose={() => setSyncOpen(false)}
+          onLibraryChanged={() => {
+            void reload();
+            void setlistState.reload();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { isNative, listNativeSetlists } from "../utils/nativeSongs";
+import {
+  deleteNativeSetlist,
+  isNative,
+  listNativeSetlists,
+  saveNativeSetlist,
+} from "../utils/nativeSongs";
 
 export type Setlist = {
   id: string; // filesystem-safe id (filename stem)
@@ -10,8 +15,8 @@ export type Setlist = {
 /**
  * Setlists (ordered song lists), stored as setlists/<id>.json.
  *  - web dev server: /api/setlists (vite plugin, full CRUD)
- *  - native (Capacitor): read-only scan of the external files dir
- * Editing happens on the PC web UI; the tablet consumes via sync.ps1.
+ *  - native (Capacitor): scan + write to the external files dir
+ * Editing happens in the Manage Songs modal on any platform.
  */
 
 /** Filesystem-safe id from a display name (ASCII slug when possible). */
@@ -78,8 +83,11 @@ export function useSetlists() {
       next[i] = { ...next[i], ...payload };
       return next;
     });
-    if (isNative()) return false; // read-only on tablet
     try {
+      if (isNative()) {
+        await saveNativeSetlist(setlist.id, payload.name, payload.songs);
+        return true;
+      }
       const res = await fetch(
         `/api/setlists/${encodeURIComponent(setlist.id)}`,
         {
@@ -96,8 +104,11 @@ export function useSetlists() {
 
   const remove = useCallback(async (id: string): Promise<boolean> => {
     setSetlists((prev) => prev.filter((s) => s.id !== id));
-    if (isNative()) return false;
     try {
+      if (isNative()) {
+        await deleteNativeSetlist(id);
+        return true;
+      }
       const res = await fetch(`/api/setlists/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
@@ -119,7 +130,6 @@ export function useSetlists() {
   return {
     setlists,
     loading,
-    editable: !isNative(),
     reload,
     save,
     remove,

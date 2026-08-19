@@ -1,5 +1,4 @@
 import { useState, type CSSProperties } from "react";
-import { createPortal } from "react-dom";
 import type { LoopRegion } from "../hooks/useAudioPlayer";
 import {
   PLAYBACK_MODE_LABELS,
@@ -9,6 +8,7 @@ import {
 import type { SongMarker } from "../hooks/useMarkers";
 import type { SongSummary } from "../types";
 import { clamp, formatTimePrecise } from "../utils/format";
+import { Modal } from "./Modal";
 import { SpeedControl } from "./SpeedControl";
 import { StemFader } from "./StemFader";
 import { VolumeFader } from "./VolumeFader";
@@ -345,32 +345,8 @@ export function PlayerBar({
         </button>
       </div>
 
-      {mixerOpen &&
-        createPortal(
-          <div
-            className="modal-overlay"
-            onClick={(e) => {
-              if (e.target === e.currentTarget) setMixerOpen(false);
-            }}
-          >
-            <div
-              className="modal-card mixer-card"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Mixer"
-            >
-              <div className="modal-head">
-                <p className="modal-title">Mixer</p>
-                <button
-                  type="button"
-                  className="modal-close"
-                  aria-label="Close mixer"
-                  onClick={() => setMixerOpen(false)}
-                >
-                  ✕
-                </button>
-              </div>
-
+      {mixerOpen && (
+        <Modal title="Mixer" onClose={() => setMixerOpen(false)} className="mixer-card">
               {stems.length > 0 && (
                 <section className="mixer-section">
                   <p className="mixer-section-title">
@@ -465,10 +441,8 @@ export function PlayerBar({
                   />
                 </section>
               </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+        </Modal>
+      )}
 
       <span className="sr-only" aria-live="polite">
         {modeLabel}
