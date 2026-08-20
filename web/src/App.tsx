@@ -34,7 +34,13 @@ export default function App() {
   const { songs, loading, error, reload } = useSongs();
   const setlistState = useSetlists();
   const [query, setQuery] = useState("");
-  const [listOpen, setListOpen] = useState(false);
+  // Auto-open song list drawer on initial launch in responsive/mobile layouts (<= 900px)
+  const [listOpen, setListOpen] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.innerWidth <= 900;
+    }
+    return false;
+  });
   const [manageOpen, setManageOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [chordSheetOpen, setChordSheetOpen] = useState(false);
