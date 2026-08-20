@@ -139,6 +139,16 @@ function Install-App {
 
 function Sync-Songs {
   if (-not (Test-Path $Songs)) { throw "songs dir not found: $Songs" }
+
+  # Ensure sample-exact FLAC stem chunks exist (instant playback on device).
+  # Fast no-op for songs whose stems/chunks/chunks.json is already present.
+  Write-Host "==> ensuring stem chunks (bin/make-stem-chunks.py) ..." -ForegroundColor Cyan
+  $chunker = Join-Path $Root "bin/make-stem-chunks.py"
+  if (Test-Path $chunker) {
+    python $chunker
+    if ($LASTEXITCODE -ne 0) { Write-Host "chunk generation failed (continuing without)" -ForegroundColor Yellow }
+  }
+
   Write-Host "==> pushing songs/ -> $DeviceSongsDir ..." -ForegroundColor Cyan
   
   # Remove existing pushed contents so adb push doesn't fail on fchown/permissions

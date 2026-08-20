@@ -254,6 +254,7 @@ export default function App() {
           markdown={lyrics.markdown}
           loading={lyrics.loading}
           error={lyrics.error}
+          buffering={player.buffering}
           markers={markerState.markers}
           stanzaTags={markerState.stanzaTags}
           currentTime={player.currentTime}

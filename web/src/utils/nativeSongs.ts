@@ -171,9 +171,12 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
             stemUrls = {};
             const stemDirAbs = `${toAbs(baseUri)}/stems`;
             for (const [stemName, fname] of stemsMap.entries()) {
-              const fullPath = `${stemDirAbs}/${encodeURIComponent(fname)}`;
-              // Direct Linux POSIX Chromium file access (completely bypasses Java IPC and LocalServer)
-              stemUrls[stemName] = `file://${fullPath}`;
+              // Route through Capacitor's local file server: fetch() in the
+              // WebView rejects raw file:// URLs ("URL scheme file is not
+              // supported"), but convertFileSrc URLs are plain https and work.
+              stemUrls[stemName] = Capacitor.convertFileSrc(
+                `${stemDirAbs}/${encodeURIComponent(fname)}`,
+              );
             }
           }
         }
@@ -182,9 +185,49 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
       /* no stems dir */
     }
 
-    const audioUrl = mainAudio && baseUri
-      ? `file://${toAbs(baseUri)}/${encodeURIComponent(mainAudio.name)}`
-      : null;
+    // Pre-split sample-exact chunks (bin/make-stem-chunks.py) enable instant
+    // playback: only the chunk at the playhead is decoded up front.
+    let chunks: SongSummary["chunks"];
+    if (stems && baseUri) {
+      try {
+        const manifestRaw = await readTextFile(`${dirPath}/stems/chunks/chunks.json`);
+        if (manifestRaw) {
+          const manifest = JSON.parse(manifestRaw) as {
+            chunkSeconds?: number;
+            stems?: Record<string, { count?: number }>;
+          };
+          if (
+            typeof manifest.chunkSeconds === "number" &&
+            manifest.chunkSeconds >= 5 &&
+            manifest.chunkSeconds <= 120 &&
+            manifest.stems
+          ) {
+            const chunksAbs = `${toAbs(baseUri)}/stems/chunks`;
+            const chunkStems: Record<string, { count: number; urlBase: string }> = {};
+            for (const [stemName, info] of Object.entries(manifest.stems)) {
+              if (stems.includes(stemName) && typeof info.count === "number" && info.count > 0) {
+                chunkStems[stemName] = {
+                  count: info.count,
+                  urlBase: Capacitor.convertFileSrc(`${chunksAbs}/${encodeURIComponent(stemName)}`),
+                };
+              }
+            }
+            if (Object.keys(chunkStems).length === stems.length) {
+              chunks = { chunkSeconds: manifest.chunkSeconds, stems: chunkStems };
+            }
+          }
+        }
+      } catch {
+        /* malformed chunks manifest — fall back to whole-file stems */
+      }
+    }
+
+    const audioUrl =
+      mainAudio && baseUri
+        ? Capacitor.convertFileSrc(
+            `${toAbs(baseUri)}/${encodeURIComponent(mainAudio.name)}`,
+          )
+        : null;
 
     songs.push({
       slug,
@@ -194,6 +237,7 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
       audioUrl,
       stems,
       stemUrls,
+      chunks,
       stemBaseUrl:
         stems && baseUri
           ? `${Capacitor.convertFileSrc(toAbs(baseUri))}/stems/`

@@ -10,6 +10,12 @@ export type SongSummary = {
   stemBaseUrl?: string;
   /** Explicit map from stem name to resolved audio URL (supports .flac, .mp3, .wav) */
   stemUrls?: Record<string, string>;
+  /** Pre-split sample-exact stem chunks for instant playback (bin/make-stem-chunks.py) */
+  chunks?: {
+    chunkSeconds: number;
+    /** stem name -> chunk count and URL base; chunk i = `${urlBase}/${i}.flac` */
+    stems: Record<string, { count: number; urlBase: string }>;
+  };
   hasLyrics: boolean;
   sourceUrl?: string;
   lyricist?: string;
