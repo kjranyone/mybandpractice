@@ -635,13 +635,115 @@ def apply_music_theory_heuristics(
     return corrected
 
 
+FLAT_TO_SHARP = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
+
+
+def analyze_chord_role_and_dominant(
+    chord_str: str,
+    key_root: int,
+    key_is_minor: bool,
+) -> tuple[str, bool, str, str | None]:
+    """Classify chord's scale degree, whether it is a dominant-type (primary, secondary, or SubV),
+    its primary degree/role, and its secondary degree (e.g. V7/vi).
+    
+    Returns: (role_display, is_dominant, base_degree, secondary_degree)
+    """
+    r, q, _ = parse_chord_components(chord_str)
+    if not r:
+        return "", False, "", None
+
+    r_canon = FLAT_TO_SHARP.get(r, r)
+    if r_canon not in PITCH_NAMES:
+        return "", False, "", None
+
+    r_idx = PITCH_NAMES.index(r_canon)
+    offset = (r_idx - key_root) % 12
+
+    # Check if quality is minor or diminished family
+    is_min_dim = q in ("m", "min", "m7", "min7", "m6", "min6", "m7-5", "m7b5", "hdim7", "dim", "dim7", "mM7", "minmaj7")
+    is_maj7 = q in ("maj7", "Maj7", "M7", "maj", "Δ7", "Δ")
+
+    is_dom7 = not is_min_dim and not is_maj7 and ("7" in q or "9" in q or "11" in q or "13" in q or "alt" in q)
+    is_maj_dom = not is_min_dim and (is_dom7 or q in ("", "sus4", "sus2", "aug"))
+
+    # Major Key mapping
+    if not key_is_minor:
+        deg_map = {0: "I", 2: "ii", 4: "iii", 5: "IV", 7: "V7" if is_dom7 else "V", 9: "vi", 11: "vii°"}
+        base_role = deg_map.get(offset, f"{r}")
+        
+        # Primary V
+        if offset == 7 and is_maj_dom:
+            return "V7" if is_dom7 else "V", True, "V", None
+        
+        # Secondary Dominants: V/ii (VI), V/iii (VII), V7/IV (I7), V/V (II), V/vi (III)
+        if offset == 9 and is_maj_dom:
+            sec = "V7/ii" if is_dom7 else "V/ii"
+            return sec, True, "VI", "ii"
+        elif offset == 11 and is_maj_dom:
+            sec = "V7/iii" if is_dom7 else "V/iii"
+            return sec, True, "VII", "iii"
+        elif offset == 0 and is_dom7:
+            sec = "V7/IV"
+            return sec, True, "I", "IV"
+        elif offset == 2 and is_maj_dom:
+            sec = "V7/V" if is_dom7 else "V/V"
+            return sec, True, "II", "V"
+        elif offset == 4 and is_maj_dom:
+            sec = "V7/vi" if is_dom7 else "V/vi"
+            return sec, True, "III", "vi"
+        
+        # SubV (Tritone substitution)
+        if is_dom7:
+            subv_map = {1: ("SubV/I", "I"), 3: ("SubV/ii", "ii"), 6: ("SubV/IV", "IV"), 8: ("SubV/V", "V"), 10: ("SubV/vi", "vi")}
+            if offset in subv_map:
+                sec, tgt = subv_map[offset]
+                return sec, True, "SubV", tgt
+
+        return base_role, False, base_role, None
+
+    else:
+        # Minor Key mapping
+        deg_map = {0: "i", 2: "ii°", 3: "III", 5: "iv", 7: "V7" if is_dom7 else ("V" if is_maj_dom else "v"), 8: "VI", 10: "VII"}
+        base_role = deg_map.get(offset, f"{r}")
+
+        # Primary V (harmonic minor)
+        if offset == 7 and is_maj_dom:
+            return "V7" if is_dom7 else "V", True, "V", None
+
+        # Minor key Secondary Dominants: V/III (VII), V/iv (I), V/V (II), V7/VI (III), V/VII (IV)
+        if offset == 10 and is_dom7:
+            sec = "V7/III"
+            return sec, True, "VII", "III"
+        elif offset == 0 and is_maj_dom:
+            sec = "V7/iv" if is_dom7 else "V/iv"
+            return sec, True, "I", "iv"
+        elif offset == 2 and is_maj_dom:
+            sec = "V7/V" if is_dom7 else "V/V"
+            return sec, True, "II", "V"
+        elif offset == 3 and is_dom7:
+            sec = "V7/VI"
+            return sec, True, "III", "VI"
+        elif offset == 5 and is_maj_dom:
+            sec = "V7/VII" if is_dom7 else "V/VII"
+            return sec, True, "IV", "VII"
+
+        # SubV in minor key
+        if is_dom7:
+            subv_map = {1: ("SubV/i", "i"), 6: ("SubV/iv", "iv"), 8: ("SubV/V", "V")}
+            if offset in subv_map:
+                sec, tgt = subv_map[offset]
+                return sec, True, "SubV", tgt
+
+        return base_role, False, base_role, None
+
+
 def detect_cadence_type(
     bar_chords: list[dict],
     next_bar_first_chord: str | None,
     key_root: int,
     key_is_minor: bool,
 ) -> tuple[str | None, list[str]]:
-    """Determine if a bar contains or leads into a II-V-I or V-I Dominant Motion.
+    """Determine if a bar contains or leads into a II-V-I, V-I, Secondary II-V-I, Secondary Dominant resolution, or SubV.
     
     Returns: (cadence_label, [chord_roles])
     """
@@ -650,41 +752,51 @@ def detect_cadence_type(
         chords.append(next_bar_first_chord)
 
     roles = []
-    has_2_5_1 = False
-    has_5_1 = False
-
-    for i in range(len(chords)):
-        r, q, _ = parse_chord_components(chords[i])
-        if not r or r not in PITCH_NAMES:
-            roles.append("")
-            continue
-        r_idx = PITCH_NAMES.index(r)
-        interval = (r_idx - key_root) % 12
-        # Assign Roman numeral / scale degree
-        if key_is_minor:
-            deg_map = {0: "i", 2: "ii°", 3: "III", 5: "iv", 7: "V7" if "7" in q or q == "" else "v", 8: "VI", 10: "VII"}
-        else:
-            deg_map = {0: "I", 2: "ii", 4: "iii", 5: "IV", 7: "V7" if "7" in q or q == "" else "V", 9: "vi", 11: "vii°"}
-        role = deg_map.get(interval, f"{r}")
+    analyses = []
+    for ch in chords:
+        role, is_dom, base_deg, sec_deg = analyze_chord_role_and_dominant(ch, key_root, key_is_minor)
         roles.append(role)
+        analyses.append({"role": role, "is_dom": is_dom, "base_deg": base_deg, "sec_deg": sec_deg, "chord": ch})
 
-    # Check for II-V-I or V-I in consecutive chords
+    cadence = None
+
+    # Check consecutive chords for cadences
     for i in range(len(chords) - 1):
         r1, q1, _ = parse_chord_components(chords[i])
         r2, q2, _ = parse_chord_components(chords[i + 1])
-        if r1 in PITCH_NAMES and r2 in PITCH_NAMES:
-            i1 = PITCH_NAMES.index(r1)
-            i2 = PITCH_NAMES.index(r2)
-            if (i1 - i2) % 12 == 7:  # Dominant 5th resolution
-                has_5_1 = True
+        if not r1 or not r2 or r1 not in PITCH_NAMES or r2 not in PITCH_NAMES:
+            continue
+
+        i1 = PITCH_NAMES.index(r1)
+        i2 = PITCH_NAMES.index(r2)
+        intv_down = (i1 - i2) % 12
+
+        a1 = analyses[i]
+        a2 = analyses[i + 1]
+
+        # 1. Dominant 5th resolution (intv_down == 7)
+        if intv_down == 7 and a1["is_dom"]:
+            # Primary V -> I
+            if (i2 - key_root) % 12 == 0:
+                cadence = "5-1"
                 if i > 0:
                     r0, _, _ = parse_chord_components(chords[i - 1])
-                    if r0 in PITCH_NAMES:
-                        i0 = PITCH_NAMES.index(r0)
-                        if (i0 - i1) % 12 == 7:
-                            has_2_5_1 = True
+                    if r0 in PITCH_NAMES and ((PITCH_NAMES.index(r0) - i1) % 12 == 7):
+                        cadence = "2-5-1"
+                break
+            # Secondary Dominant V/x -> x
+            elif a1["sec_deg"]:
+                cadence = f"5-1/{a1['sec_deg']}"
+                if i > 0:
+                    r0, _, _ = parse_chord_components(chords[i - 1])
+                    if r0 in PITCH_NAMES and ((PITCH_NAMES.index(r0) - i1) % 12 == 7):
+                        cadence = f"2-5-1/{a1['sec_deg']}"
+                break
+        # 2. SubV half-step down resolution (intv_down == 1)
+        elif intv_down == 1 and a1["is_dom"] and "SubV" in a1["role"]:
+            cadence = f"subv-1/{a1['sec_deg'] or 'I'}"
+            break
 
-    cadence = "2-5-1" if has_2_5_1 else ("5-1" if has_5_1 else None)
     return cadence, roles[:len(bar_chords)]
 
 
@@ -975,14 +1087,14 @@ def analyze_song_chords(
             else:
                 c_start = float(round(bar_t_start + cur_start_beat * beat_dur, 2))
                 c_end = float(round(bar_t_start + (cur_start_beat + cur_beats) * beat_dur, 2))
-                r, q, _ = parse_chord_components(cur_ch)
-                is_dom = ("7" in q or q == "") and r in PITCH_NAMES and ((PITCH_NAMES.index(r) - key_root) % 12 == 7)
+                role, is_dom, _, _ = analyze_chord_role_and_dominant(cur_ch, key_root, key_is_minor)
                 bar_chords.append({
                     "chord": cur_ch,
                     "beats": int(cur_beats),
                     "start": c_start,
                     "end": c_end,
                     "is_dominant": is_dom,
+                    "role": role,
                 })
                 cur_ch = ch
                 cur_beats = 1
@@ -991,14 +1103,14 @@ def analyze_song_chords(
         if cur_ch is not None:
             c_start = float(round(bar_t_start + cur_start_beat * beat_dur, 2))
             c_end = bar_t_end
-            r, q, _ = parse_chord_components(cur_ch)
-            is_dom = ("7" in q or q == "") and r in PITCH_NAMES and ((PITCH_NAMES.index(r) - key_root) % 12 == 7)
+            role, is_dom, _, _ = analyze_chord_role_and_dominant(cur_ch, key_root, key_is_minor)
             bar_chords.append({
                 "chord": cur_ch,
                 "beats": int(cur_beats),
                 "start": c_start,
                 "end": c_end,
                 "is_dominant": is_dom,
+                "role": role,
             })
 
         # Next bar first chord preview for cadence detection

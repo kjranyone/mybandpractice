@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SongChordsData, BarSegment, BarChord } from "../utils/chordStore";
-import { transposeChord, analyzeDiatonic } from "../utils/chordStore";
+import {
+  transposeChord,
+  analyzeBarChordsWithContext,
+  type ChordAnalysis,
+  type BarCadenceInfo,
+} from "../utils/chordStore";
 import type { SongSummary } from "../types";
 import { formatTimePrecise } from "../utils/format";
 import { Modal } from "./Modal";
@@ -188,16 +193,15 @@ export function ChordSheetModal({
     return transposeChord(chordsData.key, pitch);
   }, [chordsData?.key, pitch]);
 
-  const diatonic = useMemo(() => {
-    if (!displayKey) return null;
-    const table = new Map<string, { isDiatonic: boolean; roman: string | null }>();
-    for (const b of bars) {
-      for (const c of b.chords) {
-        const t = transposeChord(c.chord, pitch);
-        if (!table.has(t)) table.set(t, analyzeDiatonic(t, displayKey));
-      }
+  // 2-Pass Comprehensive Harmonic Sequence Analysis (Secondary Dominants, SubV, Related II, Cadences)
+  const harmonicAnalysis = useMemo(() => {
+    if (!displayKey || bars.length === 0) {
+      return {
+        chordMap: new Map<string, ChordAnalysis>(),
+        barCadences: new Map<number, BarCadenceInfo | null>(),
+      };
     }
-    return table;
+    return analyzeBarChordsWithContext(bars, displayKey, pitch);
   }, [bars, displayKey, pitch]);
 
   return (
@@ -230,11 +234,20 @@ export function ChordSheetModal({
             <span className="chip mono">{bars.length} 小節</span>
             {displayKey && (
               <>
-                <span className="chip chip-diatonic" title="キーの音階に含まれるコード">
+                <span className="chip chip-diatonic" title="キーの音階に含まれるコード (Ⅰ, ⅱ, ⅲ, Ⅳ, Ⅴ, ⅵ, ⅶ°)">
                   <span className="legend-dot dot-diatonic" /> ダイアトニック
                 </span>
-                <span className="chip chip-nondiatonic" title="キー外 (借用コード・セカンダリードミナント等)">
-                  <span className="legend-dot dot-nondiatonic" /> 非ダイアトニック
+                <span className="chip chip-dominant" title="主調のドミナント (Ⅴ, Ⅴ7)">
+                  <span className="legend-dot dot-dominant" /> ドミナント (Ⅴ)
+                </span>
+                <span className="chip chip-secdom" title="副ドミナント (Ⅴ/ⅵ, Ⅴ/Ⅴ, Ⅴ/ⅱ, Ⅴ/Ⅳ, Ⅴ/ⅲ など)">
+                  <span className="legend-dot dot-secdom" /> セカンダリードミナント (Ⅴ/x)
+                </span>
+                <span className="chip chip-subv" title="裏コード / 代理ドミナント (SubV/Ⅰ, SubV/ⅵ など)">
+                  <span className="legend-dot dot-subv" /> 裏コード (SubV)
+                </span>
+                <span className="chip chip-nondiatonic" title="キー外の借用コード・モーダルインターチェンジ">
+                  <span className="legend-dot dot-nondiatonic" /> 借用・非ダイアトニック
                 </span>
               </>
             )}
@@ -293,27 +306,39 @@ export function ChordSheetModal({
                   <div className="lead-system-bars">
                     {sysBars.map((b) => {
                       const isCurrentBar = b.bar_number === activeBarNum;
+                      const cadenceInfo = harmonicAnalysis.barCadences.get(b.bar_number);
 
                       return (
                         <div
                           key={`bar-${b.bar_number}`}
                           ref={isCurrentBar ? activeBarRef : null}
-                          className={`lead-bar${isCurrentBar ? " is-current-bar" : ""}${b.cadence ? ` has-${b.cadence}` : ""}`}
+                          className={`lead-bar${isCurrentBar ? " is-current-bar" : ""}${cadenceInfo ? ` has-${cadenceInfo.className}` : (b.cadence ? ` has-${b.cadence}` : "")}`}
                         >
                           <div className="lead-bar-header">
                             <div className="lead-bar-header-left">
                               <span className="lead-bar-idx mono">
                                 {b.bar_number}
                               </span>
-                              {b.cadence === "2-5-1" && (
-                                <span className="lead-cadence-badge cadence-251" title="Ⅱ-Ⅴ-Ⅰ Cadence (ツーファイブワン進行)">
-                                  Ⅱ-Ⅴ-Ⅰ
+                              {cadenceInfo ? (
+                                <span
+                                  className={`lead-cadence-badge ${cadenceInfo.className}`}
+                                  title={cadenceInfo.title}
+                                >
+                                  {cadenceInfo.badgeText}
                                 </span>
-                              )}
-                              {b.cadence === "5-1" && (
-                                <span className="lead-cadence-badge cadence-51" title="Dominant Motion (Ⅴ ➔ Ⅰ 解決)">
-                                  Ⅴ➔Ⅰ
-                                </span>
+                              ) : (
+                                <>
+                                  {b.cadence === "2-5-1" && (
+                                    <span className="lead-cadence-badge cadence-251" title="Ⅱ-Ⅴ-Ⅰ Cadence (ツーファイブワン進行)">
+                                      Ⅱ-Ⅴ-Ⅰ
+                                    </span>
+                                  )}
+                                  {b.cadence === "5-1" && (
+                                    <span className="lead-cadence-badge cadence-51" title="Dominant Motion (Ⅴ ➔ Ⅰ 解決)">
+                                      Ⅴ➔Ⅰ
+                                    </span>
+                                  )}
+                                </>
                               )}
                             </div>
                             <span className="lead-bar-time mono">
@@ -327,27 +352,63 @@ export function ChordSheetModal({
                               const chordKey = `${b.bar_number}-${c.start}`;
                               const isCurrentChord = chordKey === activeChordKey || (isCurrentBar && b.chords.length === 1);
                               const transposed = transposeChord(c.chord, pitch);
-                              const dia = diatonic?.get(transposed);
+                              const chordInfo = harmonicAnalysis.chordMap.get(chordKey);
                               const isNc = c.chord === "N.C." || c.chord === "--" || c.chord === "X";
                               const flexRatio = Math.max(1, c.beats);
+
+                              const isSecDom = chordInfo?.harmonicRole === "secondary-dominant";
+                              const isSubV = chordInfo?.harmonicRole === "sub-v";
+                              const isRelatedTwo = chordInfo?.harmonicRole === "related-two";
+                              const isDom = chordInfo?.harmonicRole === "dominant" || (!isNc && c.is_dominant);
+                              const isDiatonic = !isNc && chordInfo ? chordInfo.isDiatonic : false;
+                              const isNonDiatonic = !isNc && chordInfo ? (!chordInfo.isDiatonic && !isSecDom && !isSubV && !isRelatedTwo) : false;
+
+                              // Compose tooltip
+                              const tooltip = !isNc && chordInfo
+                                ? `${chordInfo.description} (${c.beats}拍, ${formatTimePrecise(c.start)}) — クリックでシーク`
+                                : `${transposed} (${c.beats}拍, ${formatTimePrecise(c.start)}) — クリックでシーク`;
 
                               return (
                                 <button
                                   key={`ch-${cIdx}-${c.start}`}
                                   type="button"
                                   style={{ flex: flexRatio }}
-                                  className={`lead-chord-btn${isCurrentChord ? " is-active-chord" : ""}${c.is_dominant ? " is-dominant" : ""}${isNc ? " is-nc" : ""}${!isNc && dia?.isDiatonic ? " is-diatonic" : ""}${!isNc && dia && !dia.isDiatonic ? " is-nondiatonic" : ""}`}
+                                  className={`lead-chord-btn${isCurrentChord ? " is-active-chord" : ""}${isNc ? " is-nc" : ""}${isDiatonic ? " is-diatonic" : ""}${isDom ? " is-dominant" : ""}${isSecDom ? " is-sec-dominant" : ""}${isSubV ? " is-sub-v" : ""}${isRelatedTwo ? " is-related-two" : ""}${isNonDiatonic ? " is-nondiatonic" : ""}${chordInfo?.resolvesToNext ? " is-resolving" : ""}`}
                                   onClick={() => onSeek(c.start)}
-                                  title={`${transposed}${dia?.roman ? ` [${dia.roman}]` : ""}${dia && !dia.isDiatonic ? " (非ダイアトニック)" : ""} (${c.beats}拍, ${formatTimePrecise(c.start)}) — クリックでシーク`}
+                                  title={tooltip}
                                 >
                                   <ChordSymbolDisplay chord={transposed} />
                                   <div className="lead-chord-sub">
-                                    {dia?.roman && (
-                                      <span className={`lead-chord-degree mono${dia.isDiatonic ? "" : " is-nd"}`}>
-                                        {dia.roman}
+                                    {chordInfo?.roman && !isNc && (
+                                      <span
+                                        className={`lead-chord-degree mono${
+                                          isSecDom
+                                            ? " is-sec-dom"
+                                            : isSubV
+                                            ? " is-sub-v"
+                                            : isDom
+                                            ? " is-dom"
+                                            : isRelatedTwo
+                                            ? " is-rel-two"
+                                            : chordInfo.isDiatonic
+                                            ? " is-dia"
+                                            : " is-nd"
+                                        }`}
+                                      >
+                                        {chordInfo.roman}
                                       </span>
                                     )}
-                                    {c.role && <span className="lead-chord-role mono">{c.role}</span>}
+                                    {chordInfo?.resolvesToNext && chordInfo.resolutionLabel && (
+                                      <span
+                                        className="lead-chord-res-badge mono"
+                                        title={chordInfo.description}
+                                      >
+                                        {chordInfo.resolutionLabel}
+                                      </span>
+                                    )}
+                                    {c.role && !chordInfo?.secondaryRoman && (
+                                      <span className="lead-chord-role mono">{c.role}</span>
+                                    )}
                                     {b.chords.length > 1 && (
                                       <span className="lead-chord-beats mono">
                                         {c.beats}拍
