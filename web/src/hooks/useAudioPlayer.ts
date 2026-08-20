@@ -39,6 +39,50 @@ const RATE_PRESETS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5] as const;
 
 export { RATE_PRESETS };
 
+const MIXER_STORAGE_KEY = "mybandpractice:mixer-settings";
+
+type MixerSettings = {
+  stemLevels: Record<string, number>;
+  volume: number;
+  muted: boolean;
+  pitch: number;
+  playbackRate: number;
+};
+
+const DEFAULT_MIXER_SETTINGS: MixerSettings = {
+  stemLevels: { vocals: 1, drums: 1, bass: 1, other: 1 },
+  volume: 0.85,
+  muted: false,
+  pitch: 0,
+  playbackRate: 1,
+};
+
+function loadSavedMixerSettings(): MixerSettings {
+  try {
+    const raw = localStorage.getItem(MIXER_STORAGE_KEY);
+    if (!raw) return DEFAULT_MIXER_SETTINGS;
+    const parsed = JSON.parse(raw);
+    return {
+      stemLevels: parsed.stemLevels ?? DEFAULT_MIXER_SETTINGS.stemLevels,
+      volume: typeof parsed.volume === "number" ? clamp(parsed.volume, 0, 1) : 0.85,
+      muted: typeof parsed.muted === "boolean" ? parsed.muted : false,
+      pitch: typeof parsed.pitch === "number" ? clamp(parsed.pitch, -12, 12) : 0,
+      playbackRate:
+        typeof parsed.playbackRate === "number" ? clamp(parsed.playbackRate, 0.25, 2) : 1,
+    };
+  } catch {
+    return DEFAULT_MIXER_SETTINGS;
+  }
+}
+
+function saveMixerSettingsToStorage(settings: MixerSettings) {
+  try {
+    localStorage.setItem(MIXER_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
 /** stem files: `${stemBaseUrl}${stem}.mp3` */
 function stemUrl(song: SongSummary, stem: string): string | null {
   if (song.stemBaseUrl && song.stems?.includes(stem)) {
@@ -50,6 +94,8 @@ function stemUrl(song: SongSummary, stem: string): string | null {
 export function useAudioPlayer(songs: SongSummary[]) {
   const songsRef = useRef(songs);
   songsRef.current = songs;
+
+  const savedMixer = useRef(loadSavedMixerSettings());
 
   const [current, setCurrent] = useState<SongSummary | null>(null);
   const currentRef = useRef<SongSummary | null>(null);
@@ -67,16 +113,16 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const durationRef = useRef(0);
   durationRef.current = duration;
 
-  const [volume, setVolumeState] = useState(0.85);
-  const volumeRef = useRef(0.85);
+  const [volume, setVolumeState] = useState(savedMixer.current.volume);
+  const volumeRef = useRef(savedMixer.current.volume);
   volumeRef.current = volume;
 
-  const [muted, setMutedState] = useState(false);
-  const mutedRef = useRef(false);
+  const [muted, setMutedState] = useState(savedMixer.current.muted);
+  const mutedRef = useRef(savedMixer.current.muted);
   mutedRef.current = muted;
 
-  const [playbackRate, setPlaybackRateState] = useState(1);
-  const playbackRateRef = useRef(1);
+  const [playbackRate, setPlaybackRateState] = useState(savedMixer.current.playbackRate);
+  const playbackRateRef = useRef(savedMixer.current.playbackRate);
   playbackRateRef.current = playbackRate;
 
   const [loop, setLoopState] = useState<LoopRegion | null>(null);
@@ -92,12 +138,14 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const playbackModeRef = useRef<PlaybackMode>("sequential");
   playbackModeRef.current = playbackMode;
 
-  const [stemLevels, setStemLevelsState] = useState<Record<string, number>>({});
-  const stemLevelsRef = useRef<Record<string, number>>({});
+  const [stemLevels, setStemLevelsState] = useState<Record<string, number>>(
+    savedMixer.current.stemLevels,
+  );
+  const stemLevelsRef = useRef<Record<string, number>>(savedMixer.current.stemLevels);
   stemLevelsRef.current = stemLevels;
 
-  const [pitch, setPitchState] = useState(0);
-  const pitchRef = useRef(0);
+  const [pitch, setPitchState] = useState(savedMixer.current.pitch);
+  const pitchRef = useRef(savedMixer.current.pitch);
   pitchRef.current = pitch;
 
   // --- Web Audio Graph & Persistent HTMLAudioElement Stream Pool ---
@@ -247,6 +295,12 @@ export function useAudioPlayer(songs: SongSummary[]) {
       gain.gain.linearRampToValueAtTime(targetGain, t + 0.02);
     }
   }, []);
+
+  // Apply saved mixer levels on mount
+  useEffect(() => {
+    routeStemGains();
+    applyStemGains(stemLevelsRef.current);
+  }, [applyStemGains, routeStemGains]);
 
   // 8ms Micro-crossfade de-clicking
   const executeWithDeclick = useCallback((action: () => void, fadeMs = 8) => {
@@ -425,6 +479,16 @@ export function useAudioPlayer(songs: SongSummary[]) {
     [seek],
   );
 
+  const persistMixer = useCallback(() => {
+    saveMixerSettingsToStorage({
+      stemLevels: stemLevelsRef.current,
+      volume: volumeRef.current,
+      muted: mutedRef.current,
+      pitch: pitchRef.current,
+      playbackRate: playbackRateRef.current,
+    });
+  }, []);
+
   const setStemLevel = useCallback(
     (name: string, level: number) => {
       const v = clamp(level, 0, 1);
@@ -432,8 +496,9 @@ export function useAudioPlayer(songs: SongSummary[]) {
       setStemLevelsState(next);
       stemLevelsRef.current = next;
       applyStemGains(next);
+      persistMixer();
     },
-    [applyStemGains],
+    [applyStemGains, persistMixer],
   );
 
   const resetStemLevels = useCallback(() => {
@@ -444,7 +509,8 @@ export function useAudioPlayer(songs: SongSummary[]) {
     setStemLevelsState(next);
     stemLevelsRef.current = next;
     applyStemGains(next);
-  }, [applyStemGains]);
+    persistMixer();
+  }, [applyStemGains, persistMixer]);
 
   const setPitch = useCallback(
     (semitones: number) => {
@@ -458,26 +524,35 @@ export function useAudioPlayer(songs: SongSummary[]) {
           ?.setTargetAtTime(2 ** (v / 12), ctx.currentTime, 0.03);
       }
       routeStemGains();
+      persistMixer();
     },
-    [getAudioEngine, routeStemGains],
+    [getAudioEngine, persistMixer, routeStemGains],
   );
 
-  const setVolume = useCallback((v: number) => {
-    const clamped = clamp(v, 0, 1);
-    setVolumeState(clamped);
-    volumeRef.current = clamped;
-    const { ctx, graph } = getAudioEngine();
-    const target = mutedRef.current ? 0 : clamped;
-    graph.masterGain.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
-  }, [getAudioEngine]);
+  const setVolume = useCallback(
+    (v: number) => {
+      const clamped = clamp(v, 0, 1);
+      setVolumeState(clamped);
+      volumeRef.current = clamped;
+      const { ctx, graph } = getAudioEngine();
+      const target = mutedRef.current ? 0 : clamped;
+      graph.masterGain.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
+      persistMixer();
+    },
+    [getAudioEngine, persistMixer],
+  );
 
-  const setMuted = useCallback((m: boolean) => {
-    setMutedState(m);
-    mutedRef.current = m;
-    const { ctx, graph } = getAudioEngine();
-    const target = m ? 0 : volumeRef.current;
-    graph.masterGain.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
-  }, [getAudioEngine]);
+  const setMuted = useCallback(
+    (m: boolean) => {
+      setMutedState(m);
+      mutedRef.current = m;
+      const { ctx, graph } = getAudioEngine();
+      const target = m ? 0 : volumeRef.current;
+      graph.masterGain.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
+      persistMixer();
+    },
+    [getAudioEngine, persistMixer],
+  );
 
   const toggleMute = useCallback(() => {
     setMuted(!mutedRef.current);
@@ -492,8 +567,9 @@ export function useAudioPlayer(songs: SongSummary[]) {
       for (const el of Object.values(elements)) {
         el.playbackRate = r;
       }
+      persistMixer();
     },
-    [getAudioEngine],
+    [getAudioEngine, persistMixer],
   );
 
   const setLoop = useCallback((region: LoopRegion | null) => {
