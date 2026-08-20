@@ -3566,6 +3566,104 @@
   background: linear-gradient(90deg, rgba(45, 212, 191, 0.06), rgba(45, 212, 191, 0.18));
 }
 
+/* Dynamic BPM Display in Toolbar */
+.chip-bpm-combo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.72rem;
+  transition: all 0.2s ease;
+}
+
+.chip-base-bpm {
+  color: var(--text-muted);
+}
+
+.chip-base-bpm strong {
+  color: var(--text-primary);
+  font-weight: 800;
+}
+
+.chip-live-bpm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.2;
+  transition: all 0.15s ease;
+}
+
+.chip-live-bpm.is-steady {
+  background: rgba(45, 212, 191, 0.15);
+  color: #2dd4bf;
+  border: 1px solid rgba(45, 212, 191, 0.35);
+}
+
+.chip-live-bpm.is-faster {
+  background: rgba(251, 146, 60, 0.18);
+  color: #fb923c;
+  border: 1px solid rgba(251, 146, 60, 0.4);
+}
+
+.chip-live-bpm.is-slower {
+  background: rgba(147, 197, 253, 0.15);
+  color: #93c5fd;
+  border: 1px solid rgba(147, 197, 253, 0.35);
+}
+
+.chip-live-bpm .live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+  animation: pulse-live-dot 1.2s infinite ease-in-out;
+}
+
+@keyframes pulse-live-dot {
+  0%, 100% {
+    transform: scale(0.8);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 1;
+    box-shadow: 0 0 6px currentColor;
+  }
+}
+
+.bpm-diff {
+  font-size: 0.62rem;
+  opacity: 0.85;
+}
+
+/* Local Measure Live BPM Tag */
+.lead-bar-live-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.56rem;
+  font-weight: 800;
+  padding: 0.04rem 0.25rem;
+  border-radius: 3px;
+  background: rgba(94, 234, 212, 0.18);
+  color: #5eead4;
+  border: 1px solid rgba(94, 234, 212, 0.4);
+  line-height: 1.1;
+  animation: fade-in-tag 0.15s ease-out;
+}
+
+@keyframes fade-in-tag {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 /* Legend Help Button in Toolbar */
 .chord-help-btn {
   display: inline-flex;

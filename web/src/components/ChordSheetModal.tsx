@@ -160,9 +160,10 @@ export function ChordSheetModal({
     return sys;
   }, [bars]);
 
-  // Find active bar and active chord
-  const { activeBarNum, activeChordKey } = useMemo(() => {
-    if (!bars || bars.length === 0) return { activeBarNum: null, activeChordKey: null };
+  // Find active bar, active chord, and dynamic bar BPM
+  const { activeBarNum, activeChordKey, activeBarBpm, bpmDiff } = useMemo(() => {
+    if (!bars || bars.length === 0) return { activeBarNum: null, activeChordKey: null, activeBarBpm: null, bpmDiff: null };
+    const baseBpm = chordsData?.bpm ?? 120;
     for (const b of bars) {
       if (currentTime >= b.start && currentTime < b.end) {
         let chKey: string | null = null;
@@ -172,11 +173,18 @@ export function ChordSheetModal({
             break;
           }
         }
-        return { activeBarNum: b.bar_number, activeChordKey: chKey };
+        const dur = b.end - b.start;
+        const beats = b.beats || 4;
+        let barBpm: number | null = null;
+        if (dur > 0.1 && beats > 0) {
+          barBpm = Math.round(((60.0 * beats) / dur) * 10) / 10;
+        }
+        const diff = barBpm != null ? Math.round((barBpm - baseBpm) * 10) / 10 : null;
+        return { activeBarNum: b.bar_number, activeChordKey: chKey, activeBarBpm: barBpm, bpmDiff: diff };
       }
     }
-    return { activeBarNum: null, activeChordKey: null };
-  }, [bars, currentTime]);
+    return { activeBarNum: null, activeChordKey: null, activeBarBpm: null, bpmDiff: null };
+  }, [bars, currentTime, chordsData?.bpm]);
 
   const isInitialScrollRef = useRef(true);
 
@@ -239,9 +247,33 @@ export function ChordSheetModal({
                 </span>
               )}
               {chordsData?.bpm && (
-                <span className="chip mono" title="Tempo">
-                  ♩ {Math.round(chordsData.bpm)} BPM
-                </span>
+                <div
+                  className="chip chip-bpm-combo mono"
+                  title={`基準テンポ: ${chordsData.bpm.toFixed(1)} BPM${activeBarBpm ? ` | 現在の小節 (#${activeBarNum}): ${activeBarBpm.toFixed(1)} BPM` : ""}`}
+                >
+                  <span className="chip-base-bpm">
+                    ♩ 基準 <strong>{Math.round(chordsData.bpm)}</strong>
+                  </span>
+                  {activeBarBpm != null && (
+                    <span
+                      className={`chip-live-bpm ${
+                        bpmDiff && bpmDiff > 1.5
+                          ? "is-faster"
+                          : bpmDiff && bpmDiff < -1.5
+                          ? "is-slower"
+                          : "is-steady"
+                      }`}
+                    >
+                      <span className="live-dot" />
+                      再生中: <strong>{activeBarBpm.toFixed(1)}</strong>
+                      {bpmDiff != null && Math.abs(bpmDiff) >= 0.5 && (
+                        <span className="bpm-diff">
+                          ({bpmDiff > 0 ? `+${bpmDiff.toFixed(1)}` : bpmDiff.toFixed(1)})
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
               )}
               <span className="chip mono">4/4 拍子 (4小節/段)</span>
               <span className="chip mono">{bars.length} 小節</span>
@@ -309,6 +341,8 @@ export function ChordSheetModal({
                     {sysBars.map((b) => {
                       const isCurrentBar = b.bar_number === activeBarNum;
                       const cadenceInfo = harmonicAnalysis.barCadences.get(b.bar_number);
+                      const barDur = b.end - b.start;
+                      const barBpm = barDur > 0.1 ? Math.round(((60.0 * (b.beats || 4)) / barDur) * 10) / 10 : null;
 
                       return (
                         <div
@@ -318,9 +352,17 @@ export function ChordSheetModal({
                         >
                           <div className="lead-bar-header">
                             <div className="lead-bar-header-left">
-                              <span className="lead-bar-idx mono">
+                              <span
+                                className="lead-bar-idx mono"
+                                title={`小節 #${b.bar_number} (${formatTimePrecise(b.start)} - ${formatTimePrecise(b.end)})${barBpm ? ` [♩ ${barBpm} BPM]` : ""}`}
+                              >
                                 {b.bar_number}
                               </span>
+                              {isCurrentBar && barBpm && (
+                                <span className="lead-bar-live-tag mono" title={`この小節のテンポ: ${barBpm} BPM`}>
+                                  ♩{barBpm}
+                                </span>
+                              )}
                               {cadenceInfo ? (
                                 <span
                                   className={`lead-cadence-badge ${cadenceInfo.className}`}
