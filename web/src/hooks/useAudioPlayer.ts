@@ -52,7 +52,53 @@ type DecodedSongBuffers = {
   mix: AudioBuffer | null;
   stems: Map<string, AudioBuffer>;
   duration: number;
+  isHeadOnly?: boolean;
 };
+
+// Maximum number of full song buffers to keep in memory (LRU)
+const MAX_CACHE_SONGS = 4;
+
+/** Fast-fetch the initial head chunk (first 256KB ~ 16-20 seconds) for instant playback start */
+async function fetchHeadChunk(
+  url: string,
+  maxBytes = 256 * 1024,
+  signal?: AbortSignal,
+): Promise<ArrayBuffer | null> {
+  try {
+    const res = await fetch(url, { signal });
+    if (!res.ok || !res.body) return null;
+
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+
+    while (totalBytes < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        totalBytes += value.byteLength;
+      }
+    }
+    try {
+      void reader.cancel();
+    } catch {
+      /* ignore */
+    }
+
+    if (totalBytes === 0) return null;
+
+    const combined = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const c of chunks) {
+      combined.set(c, offset);
+      offset += c.byteLength;
+    }
+    return combined.buffer;
+  } catch {
+    return null;
+  }
+}
 
 export function useAudioPlayer(songs: SongSummary[]) {
   const songsRef = useRef(songs);
@@ -239,11 +285,11 @@ export function useAudioPlayer(songs: SongSummary[]) {
   }, []);
 
   const startSourcesAt = useCallback(
-    (offsetSec: number) => {
+    (offsetSec: number, targetBuffers?: DecodedSongBuffers) => {
       const ctx = getAudioContext();
       if (ctx.state === "suspended") void ctx.resume();
 
-      const buffers = loadedBuffersRef.current;
+      const buffers = targetBuffers ?? loadedBuffersRef.current;
       if (!buffers) return;
 
       stopActiveSources();
@@ -254,7 +300,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const g = graphNodesRef.current;
       if (!g) return;
 
-      const dur = buffers.duration || durationRef.current || 1;
+      const dur = song?.durationSeconds || buffers.duration || durationRef.current || 1;
       const safeOffset = clamp(offsetSec, 0, dur);
 
       const now = ctx.currentTime + 0.02; // 20ms lead time for sub-sample hardware sync
@@ -308,25 +354,32 @@ export function useAudioPlayer(songs: SongSummary[]) {
     return Math.max(0, startOffsetRef.current + elapsed);
   }, []);
 
-  // Fetch and decode song audio (mix + stems) into memory
-  const loadSongAudioBuffers = useCallback(
-    async (song: SongSummary): Promise<DecodedSongBuffers | null> => {
-      const cached = bufferCacheRef.current.get(song.slug);
-      if (cached) return cached;
+  // Set in cache with LRU eviction
+  const setBufferInCache = useCallback((slug: string, buf: DecodedSongBuffers) => {
+    const cache = bufferCacheRef.current;
+    if (cache.has(slug)) {
+      cache.delete(slug);
+    } else if (cache.size >= MAX_CACHE_SONGS) {
+      const oldestKey = cache.keys().next().value;
+      if (oldestKey) cache.delete(oldestKey);
+    }
+    cache.set(slug, buf);
+  }, []);
 
-      loadAbortRef.current?.abort();
-      const abortCtrl = new AbortController();
-      loadAbortRef.current = abortCtrl;
-      const reqId = ++loadReqIdRef.current;
+  // Fetch full audio buffer in background (or idle prefetch)
+  const fetchFullSongBuffers = useCallback(
+    async (song: SongSummary, signal?: AbortSignal): Promise<DecodedSongBuffers | null> => {
+      const cached = bufferCacheRef.current.get(song.slug);
+      if (cached && !cached.isHeadOnly) return cached;
 
       const ctx = getAudioContext();
       const stemsMap = new Map<string, AudioBuffer>();
       let mixBuf: AudioBuffer | null = null;
       let songDur = song.durationSeconds || 0;
 
-      const decodeUrl = async (url: string): Promise<AudioBuffer | null> => {
+      const decodeFull = async (url: string): Promise<AudioBuffer | null> => {
         try {
-          const res = await fetch(url, { signal: abortCtrl.signal });
+          const res = await fetch(url, { signal });
           if (!res.ok) return null;
           const ab = await res.arrayBuffer();
           return await ctx.decodeAudioData(ab);
@@ -335,14 +388,11 @@ export function useAudioPlayer(songs: SongSummary[]) {
         }
       };
 
-      setBuffered(0.1);
-
-      // Load stems in parallel if available
       if (song.stems && song.stems.length > 0 && song.stemBaseUrl) {
         const stemPromises = song.stems.map(async (s) => {
           const url = stemUrl(song, s);
           if (!url) return;
-          const buf = await decodeUrl(url);
+          const buf = await decodeFull(url);
           if (buf) {
             stemsMap.set(s, buf);
             if (buf.duration > songDur) songDur = buf.duration;
@@ -351,26 +401,126 @@ export function useAudioPlayer(songs: SongSummary[]) {
         await Promise.all(stemPromises);
       }
 
-      // If no stems loaded or mix is needed as fallback
       if (stemsMap.size === 0 && song.audioUrl) {
-        mixBuf = await decodeUrl(song.audioUrl);
+        mixBuf = await decodeFull(song.audioUrl);
         if (mixBuf && mixBuf.duration > songDur) songDur = mixBuf.duration;
       }
 
-      if (reqId !== loadReqIdRef.current) return null;
-
-      const result: DecodedSongBuffers = {
+      const fullResult: DecodedSongBuffers = {
         slug: song.slug,
         mix: mixBuf,
         stems: stemsMap,
         duration: songDur,
+        isHeadOnly: false,
       };
 
-      bufferCacheRef.current.set(song.slug, result);
-      setBuffered(1);
-      return result;
+      setBufferInCache(song.slug, fullResult);
+      return fullResult;
     },
-    [getAudioContext],
+    [getAudioContext, setBufferInCache],
+  );
+
+  // Progressive streaming loader: returns head buffer instantly (within ~50ms), then streams full buffer
+  const loadSongAudioBuffers = useCallback(
+    async (song: SongSummary): Promise<DecodedSongBuffers | null> => {
+      const cached = bufferCacheRef.current.get(song.slug);
+      if (cached && !cached.isHeadOnly) {
+        setBuffered(1);
+        return cached;
+      }
+
+      loadAbortRef.current?.abort();
+      const abortCtrl = new AbortController();
+      loadAbortRef.current = abortCtrl;
+      const reqId = ++loadReqIdRef.current;
+
+      const ctx = getAudioContext();
+      const songDur = song.durationSeconds || 0;
+
+      setBuffered(0.15);
+
+      // 1. FAST START: Fetch & decode head chunks (256KB per stem) in parallel for near-instant playback
+      const headStems = new Map<string, AudioBuffer>();
+      let headMix: AudioBuffer | null = null;
+
+      const decodeHead = async (url: string): Promise<AudioBuffer | null> => {
+        try {
+          const ab = await fetchHeadChunk(url, 256 * 1024, abortCtrl.signal);
+          if (!ab) return null;
+          return await ctx.decodeAudioData(ab);
+        } catch {
+          return null;
+        }
+      };
+
+      if (song.stems && song.stems.length > 0 && song.stemBaseUrl) {
+        const headPromises = song.stems.map(async (s) => {
+          const url = stemUrl(song, s);
+          if (!url) return;
+          const buf = await decodeHead(url);
+          if (buf) headStems.set(s, buf);
+        });
+        await Promise.all(headPromises);
+      }
+
+      if (headStems.size === 0 && song.audioUrl) {
+        headMix = await decodeHead(song.audioUrl);
+      }
+
+      if (reqId !== loadReqIdRef.current) return null;
+
+      // Create Fast-Start Head Buffer
+      const headResult: DecodedSongBuffers = {
+        slug: song.slug,
+        mix: headMix,
+        stems: headStems,
+        duration: songDur,
+        isHeadOnly: true,
+      };
+
+      // 2. BACKGROUND: Trigger full buffer download and seamless replacement
+      void fetchFullSongBuffers(song, abortCtrl.signal)
+        .then((fullResult) => {
+          if (!fullResult || reqId !== loadReqIdRef.current) return;
+          setBuffered(1);
+
+          // Update reference
+          const prevHead = loadedBuffersRef.current;
+          loadedBuffersRef.current = fullResult;
+          setDuration(fullResult.duration);
+          durationRef.current = fullResult.duration;
+
+          // If currently playing on head buffer, seamlessly promote to full buffer at current position
+          if (prevHead?.isHeadOnly && playingRef.current && currentRef.current?.slug === song.slug) {
+            const curTime = getComputedCurrentTime();
+            startSourcesAt(curTime, fullResult);
+          }
+
+          // 3. IDLE PREFETCH: Prefetch the next song in playlist to make next track 0ms instant
+          const playlist = songsRef.current;
+          const curIdx = playlist.findIndex((s) => s.slug === song.slug);
+          if (curIdx >= 0 && curIdx < playlist.length - 1) {
+            const nextSong = playlist[curIdx + 1];
+            if (nextSong && !bufferCacheRef.current.has(nextSong.slug)) {
+              if (typeof window.requestIdleCallback === "function") {
+                window.requestIdleCallback(() => {
+                  void fetchFullSongBuffers(nextSong);
+                });
+              } else {
+                setTimeout(() => {
+                  void fetchFullSongBuffers(nextSong);
+                }, 200);
+              }
+            }
+          }
+        })
+        .catch(() => {
+          /* ignore */
+        });
+
+      return headResult;
+    },
+    [fetchFullSongBuffers, getAudioContext, getComputedCurrentTime, startSourcesAt],
   );
 
   const pause = useCallback(() => {
@@ -431,8 +581,8 @@ export function useAudioPlayer(songs: SongSummary[]) {
       setDuration(buffers.duration);
       durationRef.current = buffers.duration;
 
-      // Start playing
-      startSourcesAt(0);
+      // Start playing instantly!
+      startSourcesAt(0, buffers);
       setPlaying(true);
       playingRef.current = true;
     },
