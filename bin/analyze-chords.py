@@ -372,14 +372,16 @@ def compute_optimal_measure_grid(
     bpm: float,
     duration: float,
     primary_meter: int = 4,
+    meta_phase: int | None = None,
 ) -> list[tuple[float, float, int]]:
     """Compute optimal phase-locked measure boundaries [t_start, t_end, beats]
     using Dynamic Harmonic-Percussion (DHP) 4-phase joint optimization.
     
     Scores each candidate downbeat phase phi in {0, 1, 2, 3} across:
-    1. Harmonic rhythm transitions landing on beat 1 (downbeat)
-    2. Snare backbeat power on beats 2 & 4 vs beats 1 & 3 during active drum sections
-    3. Low-frequency kick drum energy on beat 1
+    1. Snare backbeat power on beats 2 & 4 vs beats 1 & 3 during active drum sections
+    2. Section entrance / drum drop onsets landing on beat 1
+    3. Harmonic rhythm transitions landing on beat 1 (downbeat)
+    4. Low-frequency kick drum energy on beat 1
     """
     beat_period = 60.0 / bpm if bpm > 0 else 0.5
     if len(beat_times) < 8:
@@ -399,6 +401,18 @@ def compute_optimal_measure_grid(
         if ch != "N.C." and ch != prev_ch and (c.get("end", 0) - c.get("start", 0) >= 0.5):
             chord_changes.append(float(c["start"]))
             prev_ch = ch
+
+    # Detect Section Entrance / Drum Drop beats (sudden energy jumps)
+    drum_energy = kick_band + snare_band
+    drop_indices = []
+    for b_i in range(1, len(beat_times)):
+        f_prev = int(round(beat_times[b_i - 1] * sr / hop))
+        f_cur = int(round(beat_times[b_i] * sr / hop))
+        if f_cur < len(drum_energy):
+            e_prev = drum_energy[f_prev] if f_prev < len(drum_energy) else 0.0
+            e_cur = drum_energy[f_cur]
+            if e_cur >= 3.0 and e_prev < 1.2:
+                drop_indices.append(b_i)
 
     # 1. 4-Phase Objective Evaluation
     phase_scores = {}
@@ -459,11 +473,20 @@ def compute_optimal_measure_grid(
         kick_ratio = float(k1 / max(k_oth, 1e-4))
         kick_norm = min(1.0, max(0.0, (kick_ratio - 0.8) / 0.7)) if len(k_beat1) >= 8 else 0.5
 
-        # Harmonic alignment is prioritized for intro and chord changes, balanced with drum groove
-        j_score = 0.55 * harm_norm + 0.30 * snare_norm + 0.15 * kick_norm
+        # Section Drop Accent: section entrances landing on beat 1
+        drop_hits = sum(1 for d_idx in drop_indices if (d_idx - phi) % primary_meter == 0) if drop_indices else 0
+        drop_norm = drop_hits / max(1, len(drop_indices)) if drop_indices else 0.5
+
+        # Composite score
+        j_score = 0.40 * snare_norm + 0.25 * harm_norm + 0.15 * kick_norm + 0.20 * drop_norm
         phase_scores[phi] = j_score
 
-    best_phi = max(phase_scores, key=phase_scores.get)
+    if meta_phase is not None and 0 <= meta_phase < primary_meter:
+        best_phi = meta_phase
+        print(f"      using metadata downbeat_phase override: phi={best_phi} (t={beat_times[best_phi]:.2f}s)")
+    else:
+        best_phi = max(phase_scores, key=phase_scores.get)
+        print(f"      DHP 4-Phase Scores: {{ {', '.join([f'phi={p}: {v:.3f}' for p, v in phase_scores.items()])} }} -> selected phi={best_phi} (t={beat_times[best_phi]:.2f}s)")
 
     # 2. Build dynamic measure spans from beat_times
     measures: list[tuple[float, float, int]] = []
@@ -1047,7 +1070,7 @@ def analyze_song_chords(
     meter = 4
     duration = librosa.get_duration(y=original_wav, sr=sr)
     measure_spans = compute_optimal_measure_grid(
-        refined_chords, kick_band, snare_band, hi_mag, beat_times, sr, 512, bpm, duration, primary_meter=meter
+        refined_chords, kick_band, snare_band, hi_mag, beat_times, sr, 512, bpm, duration, primary_meter=meter, meta_phase=meta_override.get("downbeat_phase")
     )
     print(f"      meter: {meter}/4, structured {len(measure_spans)} phase-locked measures.")
 
