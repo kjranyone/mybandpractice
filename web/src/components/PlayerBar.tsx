@@ -380,125 +380,137 @@ export function PlayerBar({
 
       {mixerOpen && (
         <Modal title="Mixer" onClose={() => setMixerOpen(false)} className="mixer-card">
+          {/* Fader Console: Stems (left) + Master Volume (right) */}
+          <section className="mixer-section">
+            <div className="mixer-section-header">
+              <p className="mixer-section-title">
+                {stems.length > 0 ? "Fader Console" : "Master Volume"}
+                <span className="mixer-section-hint">
+                  {stems.length > 0
+                    ? " — drag faders to blend stems & overall volume"
+                    : " — drag fader to adjust overall volume"}
+                </span>
+              </p>
               {stems.length > 0 && (
-                <section className="mixer-section">
-                  <p className="mixer-section-title">
-                    Stems
-                    <span className="mixer-section-hint">
-                      {" "}
-                      — drag faders to blend (all up = original mix)
-                    </span>
-                    <button
-                      type="button"
-                      className={`stem-all-btn${allStemsOn ? " is-hidden" : ""}`}
-                      onClick={onStemReset}
-                      disabled={allStemsOn}
-                    >
-                      Reset
-                    </button>
-                  </p>
-                  <div className="mx-fader-bank">
-                    {stems.map((s) => (
-                      <StemFader
-                        key={s}
-                        label={s}
-                        value={levels[s] ?? 1}
-                        disabled={disabled}
-                        onChange={(v) => onStemLevel(s, v)}
-                      />
-                    ))}
-                  </div>
-                </section>
+                <button
+                  type="button"
+                  className={`stem-all-btn${allStemsOn ? " is-hidden" : ""}`}
+                  onClick={onStemReset}
+                  disabled={allStemsOn}
+                >
+                  Reset Stems
+                </button>
+              )}
+            </div>
+
+            <div className="mx-fader-console">
+              {stems.length > 0 && (
+                <div className="mx-fader-bank">
+                  {stems.map((s) => (
+                    <StemFader
+                      key={s}
+                      label={s}
+                      value={levels[s] ?? 1}
+                      disabled={disabled}
+                      onChange={(v) => onStemLevel(s, v)}
+                    />
+                  ))}
+                </div>
               )}
 
-              <div className="mixer-controls">
-                <section className="mixer-section mixer-pitch">
-                  <p className="mixer-section-title">
-                    Pitch
-                    <span className="mixer-section-hint">
-                      {" "}
-                      — semitones, speed unchanged (adds slight latency)
-                    </span>
-                    {pitch !== 0 && (
-                      <button
-                        type="button"
-                        className="stem-all-btn"
-                        onClick={() => onPitch(0)}
-                      >
-                        Reset
-                      </button>
-                    )}
-                  </p>
-                  <div className="pitch-control">
-                    <div className="speed-label">
-                      <span className="speed-presets" role="group" aria-label="Pitch presets">
-                        {PITCH_PRESETS.map((p) => (
-                          <button
-                            key={p}
-                            type="button"
-                            className={`speed-chip${pitch === p ? " is-active" : ""}`}
-                            disabled={disabled}
-                            onClick={() => onPitch(p)}
-                          >
-                            {p === 0 ? "0" : `${p > 0 ? "+" : ""}${p}`}
-                          </button>
-                        ))}
-                      </span>
-                      <span
-                        className={`speed-value mono pitch-val${pitch !== 0 ? " is-on" : ""}`}
-                      >
-                        {pitch > 0 ? `+${pitch}` : pitch} st
-                      </span>
-                    </div>
-                    <div className="pitch-row">
-                      <span className="mono pitch-bound">−12</span>
-                      <input
-                        type="range"
-                        className="speed-slider pitch-slider"
-                        min={-12}
-                        max={12}
-                        step={1}
-                        value={pitch}
-                        disabled={disabled}
-                        onChange={(e) => onPitch(Number(e.target.value))}
-                        aria-label="Pitch shift (semitones)"
-                        style={
-                          {
-                            "--progress": `${((clamp(pitch, -12, 12) + 12) / 24) * 100}%`,
-                          } as CSSProperties
-                        }
-                      />
-                      <span className="mono pitch-bound">+12</span>
-                    </div>
-                  </div>
-                </section>
+              {stems.length > 0 && <div className="mx-console-divider" aria-hidden />}
 
-                <section className="mixer-section mixer-speed">
-                  <p className="mixer-section-title">
-                    Speed
-                    <span className="mixer-section-hint">
-                      {" "}
-                      — audio rate, pitch follows
-                    </span>
-                  </p>
-                  <SpeedControl
-                    rate={playbackRate}
-                    disabled={disabled}
-                    onChange={onRate}
-                  />
-                </section>
-
-                <section className="mixer-section mixer-volume">
-                  <p className="mixer-section-title">Volume</p>
-                  <VolumeFader
-                    volume={volume}
-                    muted={muted}
-                    disabled={!song}
-                    onVolume={onVolume}
-                    onToggleMute={onToggleMute}
-                  />
-                </section>
+              <div className="mx-master-fader">
+                <span className="mx-master-label">Master</span>
+                <VolumeFader
+                  volume={volume}
+                  muted={muted}
+                  disabled={!song}
+                  onVolume={onVolume}
+                  onToggleMute={onToggleMute}
+                />
               </div>
+            </div>
+          </section>
+
+          {/* Playback Tuning Section: Pitch & Speed */}
+          <div className="mixer-controls mixer-tuning-controls">
+            <section className="mixer-section mixer-pitch">
+              <p className="mixer-section-title">
+                Pitch
+                <span className="mixer-section-hint">
+                  {" "}
+                  — semitones, speed unchanged (adds slight latency)
+                </span>
+                {pitch !== 0 && (
+                  <button
+                    type="button"
+                    className="stem-all-btn"
+                    onClick={() => onPitch(0)}
+                  >
+                    Reset
+                  </button>
+                )}
+              </p>
+              <div className="pitch-control">
+                <div className="speed-label">
+                  <span className="speed-presets" role="group" aria-label="Pitch presets">
+                    {PITCH_PRESETS.map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        className={`speed-chip${pitch === p ? " is-active" : ""}`}
+                        disabled={disabled}
+                        onClick={() => onPitch(p)}
+                      >
+                        {p === 0 ? "0" : `${p > 0 ? "+" : ""}${p}`}
+                      </button>
+                    ))}
+                  </span>
+                  <span
+                    className={`speed-value mono pitch-val${pitch !== 0 ? " is-on" : ""}`}
+                  >
+                    {pitch > 0 ? `+${pitch}` : pitch} st
+                  </span>
+                </div>
+                <div className="pitch-row">
+                  <span className="mono pitch-bound">−12</span>
+                  <input
+                    type="range"
+                    className="speed-slider pitch-slider"
+                    min={-12}
+                    max={12}
+                    step={1}
+                    value={pitch}
+                    disabled={disabled}
+                    onChange={(e) => onPitch(Number(e.target.value))}
+                    aria-label="Pitch shift (semitones)"
+                    style={
+                      {
+                        "--progress": `${((clamp(pitch, -12, 12) + 12) / 24) * 100}%`,
+                      } as CSSProperties
+                    }
+                  />
+                  <span className="mono pitch-bound">+12</span>
+                </div>
+              </div>
+            </section>
+
+            <section className="mixer-section mixer-speed">
+              <p className="mixer-section-title">
+                Speed
+                <span className="mixer-section-hint">
+                  {" "}
+                  — audio rate, pitch follows
+                </span>
+              </p>
+              <SpeedControl
+                rate={playbackRate}
+                disabled={disabled}
+                onChange={onRate}
+              />
+            </section>
+          </div>
         </Modal>
       )}
 
