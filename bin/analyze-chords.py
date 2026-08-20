@@ -67,35 +67,25 @@ from utils.hparams import HParams
 
 SONGS_DIR = ROOT / "songs"
 
-# Verified tempo overrides (BPM) per song slug. The automatic detector
-# resolves tempo-octave ambiguity well for most songs, but quarter-note
-# level is genuinely ambiguous from audio alone; where an official /
-# authoritative BPM is known it wins. Sources checked 2026-08:
-# tunebat.com, ongakumichi523.jp, chordwiki (band scores).
-BPM_OVERRIDES = {
-    "danderaion": 152.0,                     # chordwiki band score
-    "drivers-high": 86.0,                    # tunebat / songbpm
-    "enter-sandman": 123.0,                  # tunebat
-    "get-wild": 87.0,                        # snare backbeat measurement
-    "hakujitsu": 92.0,                       # ongakumichi
-    "hitorino-yoru": 172.0,                  # snare backbeat (official n/a)
-    "inmu-king-yaju-mc": 130.0,              # snare backbeat (official n/a)
-    "jinrou-game": 152.0,                    # tempogram dominant / snare backbeat
-    "nokishita-no-monsutaa-nokimon": 120.0,  # snare backbeat measurement
-    "oyasumi-naki-koe-sayonara-utahime": 92.3,
-    "oyasumi-nakigoe-unagiuna-cover": 94.0,  # cover perf., measured
-    "red-reduction-division-murai-cover": 136.0,  # tempogram dominant
-    "sailing-day": 96.0,                     # snare backbeat measurement
-    "shining-ray": 161.5,                    # snare backbeat (official n/a)
-    "tentaikansoku": 165.0,                  # tunebat / chiebukuro
-    "tiger-punch": 138.0,                    # snare backbeat (official n/a)
-    "zenzen-zense-movie-ver": 190.0,         # tunebat / ongakumichi
-}
+def load_song_metadata(song_dir: Path) -> dict:
+    """Load optional metadata overrides (e.g. verified BPM or phase) from song directory."""
+    meta = {}
+    # Check meta.json, practice.json, chords.json
+    for fname in ["meta.json", "practice.json", "meta.yaml"]:
+        p = song_dir / fname
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        if "bpm" in data and isinstance(data["bpm"], (int, float)):
+                            meta["bpm"] = float(data["bpm"])
+                        if "downbeat_phase" in data and isinstance(data["downbeat_phase"], int):
+                            meta["downbeat_phase"] = data["downbeat_phase"]
+            except Exception:
+                pass
+    return meta
 
-# Verified downbeat phase overrides (0, 1, 2, or 3) per song slug.
-DOWNBEAT_PHASE_OVERRIDES = {
-    "jinrou-game": 0,                        # Beat #4 (1.70s) starts main riff after 4-beat pickup
-}
 
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 ROOT_LIST = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -686,7 +676,12 @@ def detect_cadence_type(
     return cadence, roles[:len(bar_chords)]
 
 
-def analyze_song_chords(song_dir: Path, btc_bundle: tuple | None = None) -> dict:
+def analyze_song_chords(
+    song_dir: Path,
+    btc_bundle: tuple | None = None,
+    bpm_override: float | None = None,
+) -> dict:
+    """Analyze chords for a song folder using BTC transformer + theory heuristics."""
     stems_dir = song_dir / "stems"
     audio_file = song_dir / f"{song_dir.name}.mp3"
     if not audio_file.exists():
@@ -758,9 +753,10 @@ def analyze_song_chords(song_dir: Path, btc_bundle: tuple | None = None) -> dict
         hi_mag = np.zeros(S_mag.shape[1], dtype=float)
 
     cands = estimate_tempo_candidates(onset_env, sr, 512, snare_band=snare_band)
-    override = BPM_OVERRIDES.get(song_dir.name)
+    meta_override = load_song_metadata(song_dir)
+    override = bpm_override or meta_override.get("bpm")
     if override:
-        print(f"      BPM override: {override} (verified value)")
+        print(f"      BPM override: {override} (configured value)")
         cands = [float(override)]
 
     bpm, beat_frames = score_and_select_tempo(
@@ -1072,6 +1068,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("slug", nargs="?", help="song slug under songs/ (e.g. shinen)")
     ap.add_argument("--all", action="store_true", help="analyze all songs under songs/")
+    ap.add_argument("--bpm", type=float, default=None, help="manual BPM override (e.g. --bpm 152.0)")
     args = ap.parse_args()
 
     if args.all:
@@ -1116,7 +1113,7 @@ def main() -> None:
     if not song_dir.exists():
         sys.exit(f"song dir not found: {song_dir}")
 
-    result = analyze_song_chords(song_dir)
+    result = analyze_song_chords(song_dir, bpm_override=args.bpm)
     print_summary(result)
 
 
