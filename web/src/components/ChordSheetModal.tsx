@@ -94,7 +94,7 @@ export function ChordSheetModal({
   song,
   chordsData,
   currentTime,
-  duration,
+  duration: _duration,
   playing,
   pitch,
   onSeek,
@@ -161,9 +161,8 @@ export function ChordSheetModal({
   }, [bars]);
 
   // Find active bar, active chord, and dynamic bar BPM
-  const { activeBarNum, activeChordKey, activeBarBpm, bpmDiff } = useMemo(() => {
-    if (!bars || bars.length === 0) return { activeBarNum: null, activeChordKey: null, activeBarBpm: null, bpmDiff: null };
-    const baseBpm = chordsData?.bpm ?? 120;
+  const { activeBarNum, activeChordKey, activeBarBpm } = useMemo(() => {
+    if (!bars || bars.length === 0) return { activeBarNum: null, activeChordKey: null, activeBarBpm: null };
     for (const b of bars) {
       if (currentTime >= b.start && currentTime < b.end) {
         let chKey: string | null = null;
@@ -179,12 +178,11 @@ export function ChordSheetModal({
         if (dur > 0.1 && beats > 0) {
           barBpm = Math.round(((60.0 * beats) / dur) * 10) / 10;
         }
-        const diff = barBpm != null ? Math.round((barBpm - baseBpm) * 10) / 10 : null;
-        return { activeBarNum: b.bar_number, activeChordKey: chKey, activeBarBpm: barBpm, bpmDiff: diff };
+        return { activeBarNum: b.bar_number, activeChordKey: chKey, activeBarBpm: barBpm };
       }
     }
-    return { activeBarNum: null, activeChordKey: null, activeBarBpm: null, bpmDiff: null };
-  }, [bars, currentTime, chordsData?.bpm]);
+    return { activeBarNum: null, activeChordKey: null, activeBarBpm: null };
+  }, [bars, currentTime]);
 
   const isInitialScrollRef = useRef(true);
 
@@ -227,7 +225,7 @@ export function ChordSheetModal({
   return (
     <>
       <Modal
-        title={`🎸 ${song?.title ?? "Chord Sheet"}`}
+        title={song?.title ?? "Chord Sheet"}
         sub={song?.artist}
         onClose={onClose}
         className="chord-sheet-modal"
@@ -247,43 +245,22 @@ export function ChordSheetModal({
                 </span>
               )}
               {chordsData?.bpm && (
-                <div
-                  className="chip chip-bpm-combo mono"
-                  title={`基準テンポ: ${chordsData.bpm.toFixed(1)} BPM${activeBarBpm ? ` | 現在の小節 (#${activeBarNum}): ${activeBarBpm.toFixed(1)} BPM` : ""}`}
+                <span
+                  className="chip mono"
+                  title={`基準: ${Math.round(chordsData.bpm)} BPM${activeBarBpm ? ` / 現在: ${activeBarBpm} BPM` : ""}`}
                 >
-                  <span className="chip-base-bpm">
-                    ♩ 基準 <strong>{Math.round(chordsData.bpm)}</strong>
-                  </span>
-                  {activeBarBpm != null && (
-                    <span
-                      className={`chip-live-bpm ${
-                        bpmDiff && bpmDiff > 1.5
-                          ? "is-faster"
-                          : bpmDiff && bpmDiff < -1.5
-                          ? "is-slower"
-                          : "is-steady"
-                      }`}
-                    >
-                      <span className="live-dot" />
-                      再生中: <strong>{activeBarBpm.toFixed(1)}</strong>
-                      {bpmDiff != null && Math.abs(bpmDiff) >= 0.5 && (
-                        <span className="bpm-diff">
-                          ({bpmDiff > 0 ? `+${bpmDiff.toFixed(1)}` : bpmDiff.toFixed(1)})
-                        </span>
-                      )}
-                    </span>
-                  )}
-                </div>
+                  BPM {Math.round(chordsData.bpm)}
+                  {activeBarBpm != null && ` (${activeBarBpm})`}
+                </span>
               )}
-              <span className="chip mono">4/4 拍子 (4小節/段)</span>
-              <span className="chip mono">{bars.length} 小節</span>
+              <span className="chip mono">4/4 ({bars.length}小節)</span>
               <button
                 type="button"
                 className="chip chip-btn chord-help-btn"
                 onClick={() => setLegendOpen(true)}
-                title="コードの色分け・和声機能・ケーデンスの凡例を開く"
+                title="コード進行・和声機能の凡例"
               >
-                <span className="chord-help-q">?</span> 凡例
+                凡例
               </button>
             </div>
 
@@ -299,16 +276,12 @@ export function ChordSheetModal({
 
             <button
               type="button"
-              className={`chord-play-btn${playing ? " is-playing" : ""}`}
+              className="lead-playback-btn"
               onClick={onTogglePlay}
               title={playing ? "一時停止 (Space)" : "再生 (Space)"}
             >
               {playing ? "⏸ 一時停止" : "▶ 再生"}
             </button>
-
-            <div className="chord-sheet-time mono">
-              {formatTimePrecise(currentTime)} / {formatTimePrecise(duration)}
-            </div>
           </div>
         </div>
 
@@ -325,7 +298,7 @@ export function ChordSheetModal({
             </pre>
           </div>
         ) : (
-          <div className="lead-sheet">
+          <div className="lead-sheet-body">
             {systems.map((sysBars, sysIdx) => {
               const systemStartBar = sysBars[0]?.bar_number ?? (sysIdx * BARS_PER_SYSTEM + 1);
 
@@ -341,8 +314,6 @@ export function ChordSheetModal({
                     {sysBars.map((b) => {
                       const isCurrentBar = b.bar_number === activeBarNum;
                       const cadenceInfo = harmonicAnalysis.barCadences.get(b.bar_number);
-                      const barDur = b.end - b.start;
-                      const barBpm = barDur > 0.1 ? Math.round(((60.0 * (b.beats || 4)) / barDur) * 10) / 10 : null;
 
                       return (
                         <div
@@ -354,15 +325,10 @@ export function ChordSheetModal({
                             <div className="lead-bar-header-left">
                               <span
                                 className="lead-bar-idx mono"
-                                title={`小節 #${b.bar_number} (${formatTimePrecise(b.start)} - ${formatTimePrecise(b.end)})${barBpm ? ` [♩ ${barBpm} BPM]` : ""}`}
+                                title={`小節 #${b.bar_number} (${formatTimePrecise(b.start)} - ${formatTimePrecise(b.end)})`}
                               >
                                 {b.bar_number}
                               </span>
-                              {isCurrentBar && barBpm && (
-                                <span className="lead-bar-live-tag mono" title={`この小節のテンポ: ${barBpm} BPM`}>
-                                  ♩{barBpm}
-                                </span>
-                              )}
                               {cadenceInfo ? (
                                 <span
                                   className={`lead-cadence-badge ${cadenceInfo.className}`}
@@ -373,21 +339,18 @@ export function ChordSheetModal({
                               ) : (
                                 <>
                                   {b.cadence === "2-5-1" && (
-                                    <span className="lead-cadence-badge cadence-251" title="Ⅱ-Ⅴ-Ⅰ Cadence (ツーファイブワン進行)">
+                                    <span className="lead-cadence-badge cadence-251" title="Ⅱ-Ⅴ-Ⅰ">
                                       Ⅱ-Ⅴ-Ⅰ
                                     </span>
                                   )}
                                   {b.cadence === "5-1" && (
-                                    <span className="lead-cadence-badge cadence-51" title="Dominant Motion (Ⅴ ➔ Ⅰ 解決)">
+                                    <span className="lead-cadence-badge cadence-51" title="Ⅴ-Ⅰ">
                                       Ⅴ➔Ⅰ
                                     </span>
                                   )}
                                 </>
                               )}
                             </div>
-                            <span className="lead-bar-time mono">
-                              {formatTimePrecise(b.start)}
-                            </span>
                           </div>
 
                           {/* Chords inside this measure (width proportional to beat count) */}
@@ -440,20 +403,6 @@ export function ChordSheetModal({
                                         }`}
                                       >
                                         {chordInfo.roman}
-                                      </span>
-                                    )}
-                                    {chordInfo?.resolvesToNext && chordInfo.resolutionLabel && (
-                                      <span
-                                        className={`lead-chord-motion-arrow mono${
-                                          isSecDom
-                                            ? " arrow-sec-dom"
-                                            : isSubV
-                                            ? " arrow-sub-v"
-                                            : " arrow-dom"
-                                        }`}
-                                        title={chordInfo.description}
-                                      >
-                                        {chordInfo.resolutionLabel}
                                       </span>
                                     )}
                                     {b.chords.length > 1 && (
