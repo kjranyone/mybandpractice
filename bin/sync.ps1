@@ -14,7 +14,8 @@
 param(
   [string]$Serial = "",
   [switch]$AppOnly,
-  [switch]$SongsOnly
+  [switch]$SongsOnly,
+  [switch]$Both
 )
 
 $ErrorActionPreference = "Stop"
@@ -141,31 +142,23 @@ function Sync-Songs {
   Write-Host "==> pushing songs/ -> $DeviceSongsDir ..." -ForegroundColor Cyan
   
   # Remove existing pushed contents so adb push doesn't fail on fchown/permissions
+  $DeviceParent = "/storage/emulated/0/Android/data/$Pkg/files"
+  & $adbExe -s $target shell "mkdir -p '$DeviceParent'"
   & $adbExe -s $target shell "rm -rf '$DeviceSongsDir' '$DeviceSetlistsDir'"
-  & $adbExe -s $target shell "mkdir -p $DeviceSongsDir"
-  
-  Get-ChildItem -Path $Songs -Recurse -Directory | ForEach-Object {
-    $rel = $_.FullName.Substring($Songs.Length).Replace('\', '/')
-    & $adbExe -s $target shell "mkdir -p '$DeviceSongsDir$rel'"
-  }
-  & $adbExe -s $target push "$Songs/." $DeviceSongsDir
-  if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
+
+  Write-Host "==> pushing songs/ -> $DeviceSongsDir ..." -ForegroundColor Cyan
+  & $adbExe -s $target push $Songs $DeviceParent
 
   $Setlists = Join-Path $Root "setlists"
   $DeviceSetlistsDir = "/storage/emulated/0/Android/data/$Pkg/files/setlists"
-  Write-Host "==> pushing setlists/ -> $DeviceSetlistsDir ..." -ForegroundColor Cyan
-  & $adbExe -s $target shell "mkdir -p $DeviceSetlistsDir"
   if (Test-Path $Setlists) {
-    Get-ChildItem -Path $Setlists -Recurse -Directory | ForEach-Object {
-      $rel = $_.FullName.Substring($Setlists.Length).Replace('\', '/')
-      & $adbExe -s $target shell "mkdir -p '$DeviceSetlistsDir$rel'"
-    }
-    & $adbExe -s $target push "$Setlists/." $DeviceSetlistsDir
-    if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
+    Write-Host "==> pushing setlists/ -> $DeviceSetlistsDir ..." -ForegroundColor Cyan
+    & $adbExe -s $target push $Setlists $DeviceParent
   }
 
-  Write-Host "==> setting permissions on $DeviceSongsDir ..." -ForegroundColor Cyan
-  & $adbExe -s $target shell "chmod -R 777 '$DeviceSongsDir' '$DeviceSetlistsDir' 2>/dev/null || true"
+  $DeviceFilesDir = "/storage/emulated/0/Android/data/$Pkg/files"
+  Write-Host "==> setting permissions on $DeviceFilesDir ..." -ForegroundColor Cyan
+  & $adbExe -s $target shell "chmod -R 777 '$DeviceFilesDir' 2>/dev/null || true"
 }
 
 function Select-Mode {
@@ -186,7 +179,9 @@ function Select-Mode {
   }
 }
 
-if ($AppOnly) {
+if ($Both) {
+  $mode = @{ App = $true;  Songs = $true }
+} elseif ($AppOnly) {
   $mode = @{ App = $true;  Songs = $false }
 } elseif ($SongsOnly) {
   $mode = @{ App = $false; Songs = $true }

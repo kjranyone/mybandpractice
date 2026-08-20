@@ -7,6 +7,8 @@ import {
 import type { SongSummary } from "../types";
 import { clamp } from "../utils/format";
 
+
+
 export type LoopRegion = {
   start: number;
   end: number;
@@ -83,13 +85,26 @@ function saveMixerSettingsToStorage(settings: MixerSettings) {
   }
 }
 
-/** stem files: `${stemBaseUrl}${stem}.mp3` */
+/** Resolve stem audio URL (prioritizes explicit stemUrls, then fallback to base URL) */
 function stemUrl(song: SongSummary, stem: string): string | null {
+  if (song.stemUrls?.[stem]) {
+    return song.stemUrls[stem];
+  }
   if (song.stemBaseUrl && song.stems?.includes(stem)) {
-    return `${song.stemBaseUrl}${encodeURIComponent(stem)}.mp3`;
+    return `${song.stemBaseUrl}${encodeURIComponent(stem)}.ogg`;
   }
   return null;
 }
+
+type DecodedSongBuffers = {
+  slug: string;
+  mix: AudioBuffer | null;
+  stems: Map<string, AudioBuffer>;
+  duration: number;
+};
+
+// Maximum number of full song buffers to keep in memory (LRU sliding window)
+const MAX_CACHE_SONGS = 8;
 
 export function useAudioPlayer(songs: SongSummary[]) {
   const songsRef = useRef(songs);
@@ -134,6 +149,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
   loopEnabledRef.current = loopEnabled;
 
   const [buffered, setBuffered] = useState(0); // 0–1 fraction
+  const [buffering, setBuffering] = useState(false);
   const [playbackMode, setPlaybackModeState] = useState<PlaybackMode>("sequential");
   const playbackModeRef = useRef<PlaybackMode>("sequential");
   playbackModeRef.current = playbackMode;
@@ -148,21 +164,21 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const pitchRef = useRef(savedMixer.current.pitch);
   pitchRef.current = pitch;
 
-  // --- Web Audio Graph & Persistent HTMLAudioElement Stream Pool ---
+  // --- Web Audio Graph & Buffers ---
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const loadedBuffersRef = useRef<DecodedSongBuffers | null>(null);
+  const bufferCacheRef = useRef<Map<string, DecodedSongBuffers>>(new Map());
+  const activeSourcesRef = useRef<Map<string, AudioBufferSourceNode>>(new Map());
+  const loadAbortRef = useRef<AbortController | null>(null);
 
-  // 5 Dedicated HTMLAudioElements permanently bound to Web Audio MediaElementSources
-  const elementsRef = useRef<{
-    mix: HTMLAudioElement;
-    vocals: HTMLAudioElement;
-    drums: HTMLAudioElement;
-    bass: HTMLAudioElement;
-    other: HTMLAudioElement;
-  } | null>(null);
+  // Playback tracking timestamps
+  const startTimeRef = useRef(0); // ctx.currentTime when playback started
+  const startOffsetRef = useRef(0); // song seconds offset when started
+  const pausedTimeRef = useRef(0); // song seconds when paused/seeked
 
+  // Graph Nodes
   const graphNodesRef = useRef<{
     masterGain: GainNode;
-    declickGain: GainNode;
     mixGain: GainNode;
     pitchIn: GainNode;
     bypass: GainNode;
@@ -172,8 +188,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
     stemGains: Map<string, GainNode>;
   } | null>(null);
 
-  // Initialize Web Audio Graph and Stream Pool
-  const getAudioEngine = useCallback(() => {
+  const ensureAudioGraph = useCallback(async () => {
     if (!audioCtxRef.current) {
       const AC: typeof AudioContext =
         window.AudioContext ??
@@ -181,14 +196,10 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const ctx = new AC();
       audioCtxRef.current = ctx;
 
-      // Master output & De-clicking chain
+      // Master output chain
       const masterGain = ctx.createGain();
       masterGain.gain.value = mutedRef.current ? 0 : volumeRef.current;
       masterGain.connect(ctx.destination);
-
-      const declickGain = ctx.createGain();
-      declickGain.gain.value = 1;
-      declickGain.connect(masterGain);
 
       const mixGain = ctx.createGain();
       const pitchIn = ctx.createGain();
@@ -197,77 +208,55 @@ export function useAudioPlayer(songs: SongSummary[]) {
       bypassDelay.delayTime.value = (1.5 * PITCH_GRAIN_SAMPLES + 128) / ctx.sampleRate;
 
       const postPitchGain = ctx.createGain();
-      mixGain.connect(pitchIn);
-      pitchIn.connect(postPitchGain);
-      postPitchGain.connect(declickGain);
+      postPitchGain.connect(masterGain);
       bypass.connect(bypassDelay);
-      bypassDelay.connect(declickGain);
+      bypassDelay.connect(masterGain);
+
+      let worklet: AudioWorkletNode | null = null;
+      try {
+        await registerPitchWorklet(ctx);
+        worklet = createPitchNode(ctx);
+        mixGain.connect(pitchIn);
+        pitchIn.connect(worklet);
+        worklet.connect(postPitchGain);
+      } catch (e) {
+        console.warn("Pitch worklet init failed; fallback to bypass:", e);
+        mixGain.connect(pitchIn);
+        pitchIn.connect(postPitchGain);
+      }
 
       const stemGains = new Map<string, GainNode>();
       for (const s of ["vocals", "drums", "bass", "other"]) {
         const sg = ctx.createGain();
-        sg.gain.value = 1;
-        sg.connect(pitchIn);
+        sg.gain.value = stemLevelsRef.current[s] ?? 1;
         stemGains.set(s, sg);
       }
 
       graphNodesRef.current = {
         masterGain,
-        declickGain,
         mixGain,
         pitchIn,
         bypass,
         bypassDelay,
         postPitchGain,
-        worklet: null,
+        worklet,
         stemGains,
       };
-
-      // Create persistent HTMLAudioElements with Web Audio MediaElementSource bindings
-      const createStreamEl = (targetGain: GainNode) => {
-        const el = new Audio();
-        el.crossOrigin = "anonymous";
-        el.preload = "auto";
-        el.addEventListener("progress", () => {
-          if (el.duration > 0 && el.buffered.length > 0) {
-            setBuffered(el.buffered.end(el.buffered.length - 1) / el.duration);
-          }
-        });
-        const srcNode = ctx.createMediaElementSource(el);
-        srcNode.connect(targetGain);
-        return el;
-      };
-
-      elementsRef.current = {
-        mix: createStreamEl(mixGain),
-        vocals: createStreamEl(stemGains.get("vocals")!),
-        drums: createStreamEl(stemGains.get("drums")!),
-        bass: createStreamEl(stemGains.get("bass")!),
-        other: createStreamEl(stemGains.get("other")!),
-      };
-
-      // Register Pitch Shift Worklet
-      void registerPitchWorklet(ctx)
-        .then(() => {
-          if (!audioCtxRef.current || !graphNodesRef.current) return;
-          const node = createPitchNode(ctx);
-          const g = graphNodesRef.current;
-          g.pitchIn.disconnect();
-          g.pitchIn.connect(node);
-          node.connect(g.postPitchGain);
-          g.worklet = node;
-          if (pitchRef.current !== 0) {
-            node.parameters
-              .get("ratio")
-              ?.setTargetAtTime(2 ** (pitchRef.current / 12), ctx.currentTime, 0.03);
-          }
-        })
-        .catch((e) => {
-          console.warn("Pitch worklet registration failed; falling back to direct pass:", e);
-        });
     }
-    return { ctx: audioCtxRef.current, elements: elementsRef.current!, graph: graphNodesRef.current! };
+    return audioCtxRef.current;
   }, []);
+
+  const getAudioContext = useCallback(() => {
+    if (!audioCtxRef.current) {
+      const AC: typeof AudioContext =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new AC();
+      audioCtxRef.current = ctx;
+      void ensureAudioGraph();
+    }
+    return audioCtxRef.current;
+  }, [ensureAudioGraph]);
 
   const routeStemGains = useCallback(() => {
     const g = graphNodesRef.current;
@@ -296,76 +285,256 @@ export function useAudioPlayer(songs: SongSummary[]) {
     }
   }, []);
 
-  // Apply saved mixer levels on mount
-  useEffect(() => {
-    routeStemGains();
-    applyStemGains(stemLevelsRef.current);
-  }, [applyStemGains, routeStemGains]);
-
-  // 8ms Micro-crossfade de-clicking
-  const executeWithDeclick = useCallback((action: () => void, fadeMs = 8) => {
-    const { ctx, graph } = getAudioEngine();
-    if (ctx.state === "suspended") void ctx.resume();
+  const stopActiveSources = useCallback((fadeMs = 8) => {
+    const ctx = audioCtxRef.current;
+    const g = graphNodesRef.current;
+    if (!ctx || !g) {
+      for (const src of activeSourcesRef.current.values()) {
+        try {
+          src.stop();
+          src.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+      activeSourcesRef.current.clear();
+      return;
+    }
 
     const t = ctx.currentTime;
     const fadeSec = fadeMs / 1000;
 
-    // Fast micro-fade out
-    graph.declickGain.gain.cancelScheduledValues(t);
-    graph.declickGain.gain.setValueAtTime(graph.declickGain.gain.value, t);
-    graph.declickGain.gain.linearRampToValueAtTime(0, t + fadeSec);
+    // Fast micro-fade out on all active gains to eliminate clicks/pops
+    for (const gain of g.stemGains.values()) {
+      gain.gain.cancelScheduledValues(t);
+      gain.gain.setValueAtTime(gain.gain.value, t);
+      gain.gain.linearRampToValueAtTime(0, t + fadeSec);
+    }
+    g.mixGain.gain.cancelScheduledValues(t);
+    g.mixGain.gain.setValueAtTime(g.mixGain.gain.value, t);
+    g.mixGain.gain.linearRampToValueAtTime(0, t + fadeSec);
 
-    setTimeout(() => {
-      action();
-      // Fast micro-fade in
-      const tAfter = ctx.currentTime;
-      graph.declickGain.gain.cancelScheduledValues(tAfter);
-      graph.declickGain.gain.setValueAtTime(0, tAfter);
-      graph.declickGain.gain.linearRampToValueAtTime(1, tAfter + fadeSec);
-    }, fadeMs + 2);
-  }, [getAudioEngine]);
+    const oldSources = Array.from(activeSourcesRef.current.values());
+    activeSourcesRef.current.clear();
+
+    for (const src of oldSources) {
+      try {
+        src.stop(t + fadeSec + 0.002);
+        setTimeout(() => {
+          try {
+            src.disconnect();
+          } catch {
+            /* ignore */
+          }
+        }, fadeMs + 20);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  const startSourcesAt = useCallback(
+    (offsetSec: number, targetBuffers?: DecodedSongBuffers, fadeMs = 8) => {
+      const ctx = getAudioContext();
+      if (ctx.state === "suspended") void ctx.resume();
+
+      const buffers = targetBuffers ?? loadedBuffersRef.current;
+      if (!buffers) return;
+
+      stopActiveSources(fadeMs);
+      routeStemGains();
+
+      const song = currentRef.current;
+      const g = graphNodesRef.current;
+      if (!g) return;
+
+      const dur = song?.durationSeconds || buffers.duration || durationRef.current || 1;
+      const safeOffset = clamp(offsetSec, 0, dur);
+
+      const fadeSec = fadeMs / 1000;
+      const now = ctx.currentTime + fadeSec + 0.002; // Start after micro-fade out
+      startTimeRef.current = now;
+      startOffsetRef.current = safeOffset;
+      pausedTimeRef.current = safeOffset;
+
+      const hasStems = song?.stems && song.stems.length > 0 && buffers.stems.size > 0;
+
+      if (hasStems) {
+        // Start all stems with exact sample clock synchronization and micro-fade in
+        for (const [stemName, buf] of buffers.stems) {
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.playbackRate.value = playbackRateRef.current;
+
+          let stemGain = g.stemGains.get(stemName);
+          if (!stemGain) {
+            stemGain = ctx.createGain();
+            g.stemGains.set(stemName, stemGain);
+            if (stemName === "drums" && pitchRef.current !== 0) {
+              stemGain.connect(g.bypass);
+            } else {
+              stemGain.connect(g.pitchIn);
+            }
+          }
+
+          const targetLevel = stemLevelsRef.current[stemName] ?? 1;
+          stemGain.gain.cancelScheduledValues(0);
+          stemGain.gain.setValueAtTime(targetLevel, now);
+
+          src.connect(stemGain);
+          src.start(now, safeOffset);
+          activeSourcesRef.current.set(stemName, src);
+        }
+      } else if (buffers.mix) {
+        // Fallback to stereo mix with micro-fade in
+        const src = ctx.createBufferSource();
+        src.buffer = buffers.mix;
+        src.playbackRate.value = playbackRateRef.current;
+        g.mixGain.gain.cancelScheduledValues(now);
+        g.mixGain.gain.setValueAtTime(0, now);
+        g.mixGain.gain.linearRampToValueAtTime(1, now + fadeSec);
+        src.connect(g.mixGain);
+        src.start(now, safeOffset);
+        activeSourcesRef.current.set("mix", src);
+      }
+    },
+    [getAudioContext, routeStemGains, stopActiveSources],
+  );
+
+  const getComputedCurrentTime = useCallback(() => {
+    if (!playingRef.current) return pausedTimeRef.current;
+    const ctx = audioCtxRef.current;
+    if (!ctx) return pausedTimeRef.current;
+    const elapsed = (ctx.currentTime - startTimeRef.current) * playbackRateRef.current;
+    return Math.max(0, startOffsetRef.current + elapsed);
+  }, []);
+
+  // Set in cache with LRU eviction
+  const setBufferInCache = useCallback((slug: string, buf: DecodedSongBuffers) => {
+    const cache = bufferCacheRef.current;
+    if (cache.has(slug)) {
+      cache.delete(slug);
+    } else if (cache.size >= MAX_CACHE_SONGS) {
+      const oldestKey = cache.keys().next().value;
+      if (oldestKey) cache.delete(oldestKey);
+    }
+    cache.set(slug, buf);
+  }, []);
+
+  const prefetchAbortRef = useRef<AbortController | null>(null);
+
+  // Decode all stems for a song directly in parallel (instant for FLAC)
+  const loadSongAudioBuffers = useCallback(
+    async (
+      song: SongSummary,
+      signal?: AbortSignal,
+      isBackground = false,
+    ): Promise<DecodedSongBuffers | null> => {
+      const cached = bufferCacheRef.current.get(song.slug);
+      if (cached) {
+        if (!isBackground) {
+          setBuffered(1);
+          setBuffering(false);
+        }
+        return cached;
+      }
+
+      if (!isBackground) setBuffering(true);
+      const ctx = getAudioContext();
+      const stemsMap = new Map<string, AudioBuffer>();
+      let mixBuf: AudioBuffer | null = null;
+      let songDur = song.durationSeconds || 0;
+
+      const decodeTrack = async (url: string): Promise<AudioBuffer | null> => {
+        try {
+          const res = await fetch(url, { signal });
+          if (!res.ok) return null;
+          const ab = await res.arrayBuffer();
+          return await ctx.decodeAudioData(ab);
+        } catch {
+          return null;
+        }
+      };
+
+      if (song.stems && song.stems.length > 0 && (song.stemUrls || song.stemBaseUrl)) {
+        await Promise.all(
+          song.stems.map(async (s) => {
+            const url = stemUrl(song, s);
+            if (!url) return;
+            const buf = await decodeTrack(url);
+            if (buf) {
+              stemsMap.set(s, buf);
+              if (buf.duration > songDur) songDur = buf.duration;
+            }
+          }),
+        );
+      } else if (song.audioUrl) {
+        mixBuf = await decodeTrack(song.audioUrl);
+        if (mixBuf && mixBuf.duration > songDur) songDur = mixBuf.duration;
+      }
+
+      const result: DecodedSongBuffers = {
+        slug: song.slug,
+        mix: mixBuf,
+        stems: stemsMap,
+        duration: songDur,
+      };
+
+      if (stemsMap.size > 0 || mixBuf) {
+        setBufferInCache(song.slug, result);
+        if (currentRef.current?.slug === song.slug) {
+          setDuration(result.duration);
+          durationRef.current = result.duration;
+        }
+      }
+
+      if (!isBackground && currentRef.current?.slug === song.slug) {
+        setBuffered(1);
+        setBuffering(false);
+      }
+      return result;
+    },
+    [getAudioContext, setBufferInCache],
+  );
+
+  // Proactive background prefetch of adjacent songs
+  const prefetchAdjacentSongs = useCallback(
+    (currentSong: SongSummary) => {
+      prefetchAbortRef.current?.abort();
+      const abortCtrl = new AbortController();
+      prefetchAbortRef.current = abortCtrl;
+
+      const allSongs = songsRef.current;
+      if (allSongs.length === 0) return;
+      const idx = allSongs.findIndex((s) => s.slug === currentSong.slug);
+      if (idx === -1) return;
+
+      const nextSong = allSongs[idx + 1] ?? allSongs[0];
+      if (nextSong && nextSong.slug !== currentSong.slug) {
+        void loadSongAudioBuffers(nextSong, abortCtrl.signal, true);
+      }
+    },
+    [loadSongAudioBuffers],
+  );
 
   const pause = useCallback(() => {
     if (!playingRef.current) return;
-    executeWithDeclick(() => {
-      const { elements } = getAudioEngine();
-      elements.mix.pause();
-      elements.vocals.pause();
-      elements.drums.pause();
-      elements.bass.pause();
-      elements.other.pause();
-      setPlaying(false);
-      playingRef.current = false;
-    });
-  }, [executeWithDeclick, getAudioEngine]);
+    const curT = getComputedCurrentTime();
+    pausedTimeRef.current = curT;
+    setCurrentTime(curT);
+    stopActiveSources(8);
+    setPlaying(false);
+    playingRef.current = false;
+  }, [getComputedCurrentTime, stopActiveSources]);
 
   const play = useCallback(() => {
     const cur = currentRef.current;
     if (!cur) return;
-    const { ctx, elements } = getAudioEngine();
-    if (ctx.state === "suspended") void ctx.resume();
-
-    executeWithDeclick(() => {
-      const hasStems = cur.stems && cur.stems.length > 0 && cur.stemBaseUrl;
-      const rate = playbackRateRef.current;
-
-      if (hasStems) {
-        elements.mix.pause();
-        for (const s of cur.stems!) {
-          const el = elements[s as keyof typeof elements];
-          if (el && el.src) {
-            el.playbackRate = rate;
-            void el.play().catch(() => {});
-          }
-        }
-      } else if (cur.audioUrl) {
-        elements.mix.playbackRate = rate;
-        void elements.mix.play().catch(() => {});
-      }
-      setPlaying(true);
-      playingRef.current = true;
-    });
-  }, [executeWithDeclick, getAudioEngine]);
+    const curT = pausedTimeRef.current;
+    startSourcesAt(curT);
+    setPlaying(true);
+    playingRef.current = true;
+  }, [startSourcesAt]);
 
   const toggle = useCallback(async () => {
     if (playingRef.current) {
@@ -376,70 +545,133 @@ export function useAudioPlayer(songs: SongSummary[]) {
   }, [pause, play]);
 
   const playSong = useCallback(
-    (song: SongSummary) => {
+    async (song: SongSummary) => {
       const cur = currentRef.current;
-      const { ctx, elements } = getAudioEngine();
-      if (ctx.state === "suspended") void ctx.resume();
-
-      if (cur?.slug === song.slug) {
+      if (cur?.slug === song.slug && loadedBuffersRef.current) {
         play();
         return;
       }
 
-      executeWithDeclick(() => {
-        // Stop current
-        elements.mix.pause();
-        elements.vocals.pause();
-        elements.drums.pause();
-        elements.bass.pause();
-        elements.other.pause();
+      stopActiveSources(8);
+      playingRef.current = false;
+      setPlaying(false);
+      setCurrent(song);
+      currentRef.current = song;
+      loadedBuffersRef.current = null;
+      setCurrentTime(0);
+      currentTimeRef.current = 0;
+      pausedTimeRef.current = 0;
+      startOffsetRef.current = 0;
+      startTimeRef.current = 0;
+      setDuration(song.durationSeconds || 0);
+      durationRef.current = song.durationSeconds || 0;
+      setLoopState(null);
+      setLoopEnabledState(false);
+      loopRef.current = null;
+      loopEnabledRef.current = false;
 
-        setLoopState(null);
-        setLoopEnabledState(false);
-        loopRef.current = null;
-        loopEnabledRef.current = false;
-
-        setCurrent(song);
-        setCurrentTime(0);
-        currentTimeRef.current = 0;
-        setDuration(song.durationSeconds || 0);
-        durationRef.current = song.durationSeconds || 0;
-
-        routeStemGains();
-        applyStemGains(stemLevelsRef.current);
-
-        const hasStems = song.stems && song.stems.length > 0 && song.stemBaseUrl;
-        const rate = playbackRateRef.current;
-
-        if (hasStems) {
-          elements.mix.src = "";
-          for (const s of ["vocals", "drums", "bass", "other"]) {
-            const el = elements[s as keyof typeof elements];
-            if (song.stems!.includes(s)) {
-              el.src = stemUrl(song, s)!;
-              el.currentTime = 0;
-              el.playbackRate = rate;
-              void el.play().catch(() => {});
-            } else {
-              el.src = "";
-            }
-          }
-        } else if (song.audioUrl) {
-          elements.vocals.src = "";
-          elements.drums.src = "";
-          elements.bass.src = "";
-          elements.other.src = "";
-          elements.mix.src = song.audioUrl;
-          elements.mix.currentTime = 0;
-          elements.mix.playbackRate = rate;
-          void elements.mix.play().catch(() => {});
-        }
-
+      // 1. Check memory cache (0ms instant start)
+      const cached = bufferCacheRef.current.get(song.slug);
+      if (cached) {
+        loadedBuffersRef.current = cached;
+        setDuration(cached.duration);
+        durationRef.current = cached.duration;
+        startSourcesAt(0, cached);
         setPlaying(true);
         playingRef.current = true;
-      });
+        setBuffered(1);
+        setBuffering(false);
+        setTimeout(() => prefetchAdjacentSongs(song), 1000);
+        return;
+      }
+
+      // 2. Direct Parallel Stem Decode (Clean & Reliable)
+      setBuffering(true);
+      setBuffered(0.2);
+
+      // Yield 20ms so browser paints the loading spinners immediately before CPU decode starts
+      await new Promise((r) => setTimeout(r, 20));
+
+      loadAbortRef.current?.abort();
+      const abortCtrl = new AbortController();
+      loadAbortRef.current = abortCtrl;
+      const signal = abortCtrl.signal;
+
+      const ctx = await ensureAudioGraph();
+      if (ctx.state === "suspended") void ctx.resume();
+
+      const decodeTrack = async (url: string): Promise<AudioBuffer | null> => {
+        try {
+          console.log(`[AudioPlayer] Fetching: ${url}`);
+          const res = await fetch(url, { signal });
+          if (!res.ok) {
+            console.error(`[AudioPlayer] Fetch failed HTTP ${res.status}: ${url}`);
+            return null;
+          }
+          const ab = await res.arrayBuffer();
+          const buf = await ctx.decodeAudioData(ab);
+          console.log(`[AudioPlayer] Decoded OK (${buf.duration.toFixed(1)}s): ${url}`);
+          return buf;
+        } catch (err) {
+          console.error(`[AudioPlayer] Decode error for ${url}:`, err);
+          return null;
+        }
+      };
+
+      const stemsMap = new Map<string, AudioBuffer>();
+      let mixBuf: AudioBuffer | null = null;
+      let songDur = song.durationSeconds || 0;
+
+      if (song.stems && song.stems.length > 0 && (song.stemUrls || song.stemBaseUrl)) {
+        await Promise.all(
+          song.stems.map(async (s) => {
+            const url = stemUrl(song, s);
+            if (!url) return;
+            const buf = await decodeTrack(url);
+            if (buf) stemsMap.set(s, buf);
+          }),
+        );
+      } else if (song.audioUrl) {
+        mixBuf = await decodeTrack(song.audioUrl);
+      }
+
+      if (signal.aborted || currentRef.current?.slug !== song.slug) return;
+
+      let maxDur = songDur;
+      for (const b of stemsMap.values()) {
+        if (b.duration > maxDur) maxDur = b.duration;
+      }
+      if (mixBuf && mixBuf.duration > maxDur) maxDur = mixBuf.duration;
+
+      const fullBuffers: DecodedSongBuffers = {
+        slug: song.slug,
+        mix: mixBuf,
+        stems: stemsMap,
+        duration: maxDur,
+      };
+
+      setBufferInCache(song.slug, fullBuffers);
+      loadedBuffersRef.current = fullBuffers;
+      setDuration(maxDur);
+      durationRef.current = maxDur;
+      setBuffered(1);
+      setBuffering(false);
+
+      startSourcesAt(0, fullBuffers);
+      setPlaying(true);
+      playingRef.current = true;
+
+      setTimeout(() => prefetchAdjacentSongs(song), 800);
     },
-    [applyStemGains, executeWithDeclick, getAudioEngine, play, routeStemGains],
+    [
+      getAudioContext,
+      getComputedCurrentTime,
+      play,
+      prefetchAdjacentSongs,
+      setBufferInCache,
+      startSourcesAt,
+      stopActiveSources,
+    ],
   );
 
   const playSongRef = useRef(playSong);
@@ -449,34 +681,24 @@ export function useAudioPlayer(songs: SongSummary[]) {
     (time: number) => {
       const dur = durationRef.current || 0;
       const targetTime = clamp(time, 0, dur || time);
+      pausedTimeRef.current = targetTime;
       setCurrentTime(targetTime);
       currentTimeRef.current = targetTime;
 
-      executeWithDeclick(() => {
-        const { elements } = getAudioEngine();
-        const cur = currentRef.current;
-        const hasStems = cur?.stems && cur.stems.length > 0 && cur.stemBaseUrl;
-
-        if (hasStems) {
-          for (const s of cur.stems!) {
-            const el = elements[s as keyof typeof elements];
-            if (el && el.src) {
-              el.currentTime = targetTime;
-            }
-          }
-        } else if (elements.mix.src) {
-          elements.mix.currentTime = targetTime;
-        }
-      });
+      if (playingRef.current) {
+        startSourcesAt(targetTime);
+      }
     },
-    [executeWithDeclick, getAudioEngine],
+    [startSourcesAt],
   );
+
 
   const skip = useCallback(
     (delta: number) => {
-      seek(currentTimeRef.current + delta);
+      const curT = getComputedCurrentTime();
+      seek(curT + delta);
     },
-    [seek],
+    [getComputedCurrentTime, seek],
   );
 
   const persistMixer = useCallback(() => {
@@ -517,16 +739,17 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const v = Math.round(clamp(semitones, -12, 12));
       setPitchState(v);
       pitchRef.current = v;
-      const { ctx, graph } = getAudioEngine();
-      if (graph.worklet) {
-        graph.worklet.parameters
+      const ctx = audioCtxRef.current;
+      const node = graphNodesRef.current?.worklet;
+      if (ctx && node) {
+        node.parameters
           .get("ratio")
           ?.setTargetAtTime(2 ** (v / 12), ctx.currentTime, 0.03);
       }
       routeStemGains();
       persistMixer();
     },
-    [getAudioEngine, persistMixer, routeStemGains],
+    [persistMixer, routeStemGains],
   );
 
   const setVolume = useCallback(
@@ -534,24 +757,30 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const clamped = clamp(v, 0, 1);
       setVolumeState(clamped);
       volumeRef.current = clamped;
-      const { ctx, graph } = getAudioEngine();
-      const target = mutedRef.current ? 0 : clamped;
-      graph.masterGain.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
+      const g = graphNodesRef.current;
+      const ctx = audioCtxRef.current;
+      if (g && ctx) {
+        const target = mutedRef.current ? 0 : clamped;
+        g.masterGain.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
+      }
       persistMixer();
     },
-    [getAudioEngine, persistMixer],
+    [persistMixer],
   );
 
   const setMuted = useCallback(
     (m: boolean) => {
       setMutedState(m);
       mutedRef.current = m;
-      const { ctx, graph } = getAudioEngine();
-      const target = m ? 0 : volumeRef.current;
-      graph.masterGain.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
+      const g = graphNodesRef.current;
+      const ctx = audioCtxRef.current;
+      if (g && ctx) {
+        const target = m ? 0 : volumeRef.current;
+        g.masterGain.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
+      }
       persistMixer();
     },
-    [getAudioEngine, persistMixer],
+    [persistMixer],
   );
 
   const toggleMute = useCallback(() => {
@@ -563,13 +792,15 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const r = clamp(rate, 0.25, 2);
       setPlaybackRateState(r);
       playbackRateRef.current = r;
-      const { elements } = getAudioEngine();
-      for (const el of Object.values(elements)) {
-        el.playbackRate = r;
+
+      if (playingRef.current) {
+        const curT = getComputedCurrentTime();
+        pausedTimeRef.current = curT;
+        startSourcesAt(curT);
       }
       persistMixer();
     },
-    [getAudioEngine, persistMixer],
+    [getComputedCurrentTime, persistMixer, startSourcesAt],
   );
 
   const setLoop = useCallback((region: LoopRegion | null) => {
@@ -599,13 +830,13 @@ export function useAudioPlayer(songs: SongSummary[]) {
       loopEnabledRef.current = on;
       const lp = loopRef.current;
       if (on && lp) {
-        const curT = currentTimeRef.current;
+        const curT = getComputedCurrentTime();
         if (curT < lp.start || curT >= lp.end) {
           seek(lp.start);
         }
       }
     },
-    [seek],
+    [getComputedCurrentTime, seek],
   );
 
   const clearLoop = useCallback(() => {
@@ -616,18 +847,18 @@ export function useAudioPlayer(songs: SongSummary[]) {
   }, []);
 
   const setLoopIn = useCallback(() => {
-    const t = currentTimeRef.current;
+    const t = getComputedCurrentTime();
     const end = loopRef.current?.end ?? Math.min(t + 8, durationRef.current || t + 8);
     setLoop({ start: t, end: Math.max(end, t + MIN_LOOP) });
     setLoopEnabled(true);
-  }, [setLoop, setLoopEnabled]);
+  }, [getComputedCurrentTime, setLoop, setLoopEnabled]);
 
   const setLoopOut = useCallback(() => {
-    const t = currentTimeRef.current;
+    const t = getComputedCurrentTime();
     const start = loopRef.current?.start ?? Math.max(0, t - 8);
     setLoop({ start: Math.min(start, t - MIN_LOOP), end: t });
     setLoopEnabled(true);
-  }, [setLoop, setLoopEnabled]);
+  }, [getComputedCurrentTime, setLoop, setLoopEnabled]);
 
   const setPlaybackMode = useCallback((mode: PlaybackMode) => {
     playbackModeRef.current = mode;
@@ -647,7 +878,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const playPrev = useCallback(() => {
     const cur = currentRef.current;
     if (!cur) return;
-    const curT = currentTimeRef.current;
+    const curT = getComputedCurrentTime();
     if (curT > 3) {
       seek(0);
       return;
@@ -656,78 +887,60 @@ export function useAudioPlayer(songs: SongSummary[]) {
     const prev = songsRef.current[idx - 1];
     if (prev) void playSongRef.current(prev);
     else seek(0);
-  }, [seek]);
+  }, [getComputedCurrentTime, seek]);
 
-  // Master PLL Phase Sync, Position Tracking & Loop / End Detection Loop
+  // Main playback animation & loop / end trigger loop
   useEffect(() => {
     let animId = 0;
-    const { elements } = getAudioEngine();
-
     const checkPlayback = () => {
       if (playingRef.current) {
-        const cur = currentRef.current;
-        const hasStems = cur?.stems && cur.stems.length > 0 && cur.stemBaseUrl;
-
-        // Choose master clock element (drums -> vocals -> mix)
-        const masterEl = hasStems
-          ? elements.drums.src
-            ? elements.drums
-            : elements.vocals
-          : elements.mix;
-
-        const masterT = masterEl.currentTime || 0;
-        const dur = masterEl.duration || durationRef.current || cur?.durationSeconds || 0;
+        const t = getComputedCurrentTime();
+        const dur = durationRef.current;
         const lp = loopRef.current;
-
-        // PLL Phase Synchronization: Keep all stems synchronized to master clock within ±5ms
-        if (hasStems && masterT > 0.05) {
-          const baseRate = playbackRateRef.current;
-          for (const s of cur.stems!) {
-            const follower = elements[s as keyof typeof elements];
-            if (follower && follower !== masterEl && follower.src && !follower.paused) {
-              const delta = masterT - follower.currentTime;
-              if (Math.abs(delta) > 0.035) {
-                // Hard jump for large drift (>35ms)
-                follower.currentTime = masterT;
-              } else if (Math.abs(delta) > 0.005) {
-                // Micro PLL speed compensation for minor drift (5-35ms)
-                follower.playbackRate = baseRate * (1 + delta * 0.5);
-              } else {
-                follower.playbackRate = baseRate;
-              }
-            }
-          }
-        }
 
         // Loop handling
         if (loopEnabledRef.current && lp && lp.end > lp.start) {
-          if (masterT >= lp.end - 0.02) {
+          if (t >= lp.end - 0.02) {
             seek(lp.start);
             animId = requestAnimationFrame(checkPlayback);
             return;
           }
         }
 
-        // Track ended handling
-        if (dur > 0 && masterT >= dur - 0.05) {
+        // Track ended handling: strictly check that we are playing, valid song, valid duration, and reached end
+        if (
+          playingRef.current &&
+          currentRef.current &&
+          dur > 1 &&
+          t >= dur - 0.05 &&
+          t > 0.5
+        ) {
+          const cur = currentRef.current;
+          const idx = cur ? songsRef.current.findIndex((s) => s.slug === cur.slug) : -1;
           if (loopEnabledRef.current && lp) {
             seek(lp.start);
           } else if (playbackModeRef.current === "repeat-one") {
             seek(0);
+          } else if (idx !== -1) {
+            const next =
+              songsRef.current[idx + 1] ??
+              (playbackModeRef.current === "repeat-all" ? songsRef.current[0] : undefined);
+            if (next) {
+              void playSongRef.current(next);
+            } else {
+              pause();
+              seek(0);
+            }
           } else {
             pause();
-            playNext();
+            seek(0);
           }
           animId = requestAnimationFrame(checkPlayback);
           return;
         }
 
-        setCurrentTime(masterT);
-        currentTimeRef.current = masterT;
-        if (dur > 0 && durationRef.current !== dur) {
-          setDuration(dur);
-          durationRef.current = dur;
-        }
+        setCurrentTime(t);
+        currentTimeRef.current = t;
       }
       animId = requestAnimationFrame(checkPlayback);
     };
@@ -735,8 +948,9 @@ export function useAudioPlayer(songs: SongSummary[]) {
     animId = requestAnimationFrame(checkPlayback);
     return () => {
       if (animId) cancelAnimationFrame(animId);
+      stopActiveSources();
     };
-  }, [getAudioEngine, pause, playNext, seek]);
+  }, [getComputedCurrentTime, pause, playNext, seek, stopActiveSources]);
 
   return {
     current,
@@ -749,6 +963,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
     loop,
     loopEnabled,
     buffered,
+    buffering,
     playbackMode,
     stemLevels,
     pitch,

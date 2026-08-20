@@ -235,6 +235,7 @@ export default function App() {
           displaySongs={filtered}
           currentSlug={player.current?.slug ?? null}
           playing={player.playing}
+          buffering={player.buffering}
           query={query}
           onQueryChange={setQuery}
           onSelect={(song) => {
@@ -273,6 +274,7 @@ export default function App() {
         loop={player.loop}
         loopEnabled={player.loopEnabled}
         buffered={player.buffered}
+        buffering={player.buffering}
         playbackMode={player.playbackMode}
         stemLevels={player.stemLevels}
         onStemLevel={player.setStemLevel}

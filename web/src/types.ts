@@ -6,8 +6,10 @@ export type SongSummary = {
   audioUrl: string | null;
   /** available separated stems, e.g. ["vocals","drums","bass","other"] */
   stems?: string[];
-  /** base URL for stem files; `${stemBaseUrl}${stem}.mp3` resolves audio */
+  /** base URL for stem files; `${stemBaseUrl}${stem}.flac` / `.mp3` resolves audio */
   stemBaseUrl?: string;
+  /** Explicit map from stem name to resolved audio URL (supports .flac, .mp3, .wav) */
+  stemUrls?: Record<string, string>;
   hasLyrics: boolean;
   sourceUrl?: string;
   lyricist?: string;

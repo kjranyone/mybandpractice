@@ -80,9 +80,14 @@ export class SyncSender {
             .filter(
               (f) =>
                 f.name.startsWith(`${slug}/stems/`) &&
-                f.name.toLowerCase().endsWith(".mp3"),
+                (f.name.toLowerCase().endsWith(".flac") ||
+                  f.name.toLowerCase().endsWith(".mp3")),
             )
-            .map((f) => f.name.slice(`${slug}/stems/`.length, -".mp3".length)),
+            .map((f) =>
+              f.name
+                .slice(`${slug}/stems/`.length)
+                .replace(/\.(flac|mp3)$/i, ""),
+            ),
         ),
       ].filter(
         (s) => !["mix", "mixdown", "original"].includes(s.toLowerCase()),
