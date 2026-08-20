@@ -1581,25 +1581,25 @@
   margin: 0 0.15rem;
 }
 
-.mx-master-fader {
-  flex: 1.1;
-  min-width: 58px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 0.2rem 0.25rem;
-  border-radius: 6px;
-  background: rgba(94, 234, 212, 0.04);
-  border: 1px solid rgba(94, 234, 212, 0.2);
+.mx-fader-master {
+  flex: 1;
 }
 
 .mx-master-label {
-  font-size: 0.62rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--accent);
-  margin-bottom: 0.15rem;
+  color: var(--accent) !important;
+}
+
+.mx-master-val {
+  color: var(--accent) !important;
+}
+
+.mx-master-fill {
+  background: linear-gradient(
+    180deg,
+    var(--accent) 0%,
+    #0d9488 55%,
+    #134e4a 100%
+  ) !important;
 }
 
 /* Playback Tuning: Pitch & Speed side-by-side */

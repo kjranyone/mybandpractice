@@ -420,16 +420,13 @@ export function PlayerBar({
 
               {stems.length > 0 && <div className="mx-console-divider" aria-hidden />}
 
-              <div className="mx-master-fader">
-                <span className="mx-master-label">Master</span>
-                <VolumeFader
-                  volume={volume}
-                  muted={muted}
-                  disabled={!song}
-                  onVolume={onVolume}
-                  onToggleMute={onToggleMute}
-                />
-              </div>
+              <VolumeFader
+                volume={volume}
+                muted={muted}
+                disabled={!song}
+                onVolume={onVolume}
+                onToggleMute={onToggleMute}
+              />
             </div>
           </section>
 
