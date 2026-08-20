@@ -311,6 +311,15 @@ export default function App() {
             void reload();
             void setlistState.reload();
           }}
+          onRefreshAll={async () => {
+            await Promise.allSettled([
+              reload(),
+              setlistState.reload(),
+              lyrics.reload?.(),
+              markerState.reload?.(),
+              chords.reload?.(),
+            ]);
+          }}
           onSaveSetlist={setlistState.save}
           onRemoveSetlist={setlistState.remove}
           onCreateSetlist={setlistState.create}

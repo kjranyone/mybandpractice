@@ -80,6 +80,7 @@ BPM_OVERRIDES = {
     "hakujitsu": 92.0,                       # ongakumichi
     "hitorino-yoru": 172.0,                  # snare backbeat (official n/a)
     "inmu-king-yaju-mc": 130.0,              # snare backbeat (official n/a)
+    "jinrou-game": 152.0,                    # tempogram dominant / snare backbeat
     "nokishita-no-monsutaa-nokimon": 120.0,  # snare backbeat measurement
     "oyasumi-naki-koe-sayonara-utahime": 92.3,
     "oyasumi-nakigoe-unagiuna-cover": 94.0,  # cover perf., measured
@@ -89,6 +90,11 @@ BPM_OVERRIDES = {
     "tentaikansoku": 165.0,                  # tunebat / chiebukuro
     "tiger-punch": 138.0,                    # snare backbeat (official n/a)
     "zenzen-zense-movie-ver": 190.0,         # tunebat / ongakumichi
+}
+
+# Verified downbeat phase overrides (0, 1, 2, or 3) per song slug.
+DOWNBEAT_PHASE_OVERRIDES = {
+    "jinrou-game": 0,                        # Beat #4 (1.70s) starts main riff after 4-beat pickup
 }
 
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -225,15 +231,17 @@ def load_btc_model() -> tuple[BTC_model, dict, dict, HParams, dict[int, str]]:
 # =========================================================================
 # Tempo / Beat / Downbeat Detection
 # =========================================================================
-def estimate_tempo_candidates(onset_env: np.ndarray, sr: int, hop: int) -> list[float]:
-    """Strong tempogram peaks folded into the [70, 200) BPM range.
-
-    Strong bins carrying >= 25% of the dominant peak energy are collected
-    in a musically sane band (30-250 BPM, excluding librosa's inf/DC bins),
-    octave-folded into [70, 200) (some J-rock lives at 190+ BPM), and each
-    gains an octave-up variant when < 240. The prior-free tempogram is used
-    (librosa.feature.tempo's start_bpm prior returns values that do not
-    even exist in the tempogram for some songs)."""
+# =========================================================================
+# Tempo / Beat / Downbeat Detection with Backbeat ACF & Dynamic Bar DP
+# =========================================================================
+def estimate_tempo_candidates(
+    onset_env: np.ndarray,
+    sr: int,
+    hop: int,
+    snare_band: np.ndarray | None = None,
+) -> list[float]:
+    """Extract strong tempo candidates from both prior-free tempogram and
+    snare autocorrelation (ACF), handling polyrhythmic ratios (3:2, 4:3) and octaves."""
     tg = librosa.feature.tempogram(
         onset_envelope=onset_env, sr=sr, hop_length=hop
     )
@@ -243,24 +251,43 @@ def estimate_tempo_candidates(onset_env: np.ndarray, sr: int, hop: int) -> list[
         (freqs >= 30.0) & (freqs <= 250.0)
         & np.isfinite(freqs) & np.isfinite(mean_tg)
     )
-    if not mask.any():
-        return [120.0]
-
-    band_freqs = freqs[mask]
-    band_scores = mean_tg[mask]
-    strong = band_scores >= 0.25 * band_scores.max()
-    top = np.argsort(band_scores[strong])[::-1][:8]
-
     cands: set[float] = set()
-    for i in top:
-        v = float(band_freqs[strong][i])
-        while v < 70.0:
-            v *= 2.0
-        while v >= 200.0:
-            v /= 2.0
-        cands.add(round(v, 2))
-        if v * 2.0 < 240.0:
-            cands.add(round(v * 2.0, 2))
+    if mask.any():
+        band_freqs = freqs[mask]
+        band_scores = mean_tg[mask]
+        strong = band_scores >= 0.20 * band_scores.max()
+        top = np.argsort(band_scores[strong])[::-1][:8]
+        for i in top:
+            v = float(band_freqs[strong][i])
+            while v < 70.0:
+                v *= 2.0
+            while v >= 200.0:
+                v /= 2.0
+            cands.add(round(v, 1))
+            if v * 2.0 < 240.0:
+                cands.add(round(v * 2.0, 1))
+
+    # Snare Autocorrelation (ACF) for backbeat period discovery
+    if snare_band is not None and len(snare_band) > 0:
+        snare_onset = np.clip(np.diff(snare_band, prepend=snare_band[0]), 0.0, None)
+        min_lag = int(0.25 * sr / hop)
+        max_lag = int(3.0 * sr / hop)
+        acf = np.correlate(snare_onset, snare_onset, mode="full")
+        acf = acf[len(snare_onset) - 1 :]
+        if len(acf) > min_lag:
+            lags = np.arange(min_lag, min(max_lag, len(acf)))
+            scores = acf[lags]
+            scores = np.convolve(scores, np.ones(3) / 3, mode="same")
+            for lag in lags[np.argsort(scores)[::-1][:6]]:
+                period = lag * hop / sr
+                if period > 0:
+                    for factor in [1.0, 2.0, 4.0]:
+                        b = round(60.0 / (period / factor), 1)
+                        if 70.0 <= b <= 220.0:
+                            cands.add(b)
+
+    if not cands:
+        cands.add(120.0)
     return sorted(cands)
 
 
@@ -274,187 +301,199 @@ def _sample_env(env: np.ndarray, frames: np.ndarray) -> np.ndarray:
     return np.asarray(out, dtype=float)
 
 
-def score_beat_candidate(
+def score_and_select_tempo(
     onset_env: np.ndarray,
+    kick_band: np.ndarray,
+    snare_band: np.ndarray,
+    sr: int,
+    hop: int,
+    candidates: list[float],
+) -> tuple[float, np.ndarray]:
+    """Select the optimal quarter-note tempo hypothesis using onset regularity,
+    snare/kick backbeat contrast, and human musical tempo priors."""
+    best_bpm, best_frames = 120.0, np.array([], dtype=int)
+    best_score = -999.0
+
+    for cand in candidates:
+        _, frames = librosa.beat.beat_track(
+            onset_envelope=onset_env,
+            sr=sr,
+            hop_length=hop,
+            bpm=cand,
+            tightness=100,
+            trim=False,
+        )
+        if len(frames) < 12:
+            continue
+
+        ibi = np.diff(frames)
+        med_ibi = float(np.median(ibi))
+        if med_ibi <= 0:
+            continue
+        reg = 1.0 - min(1.0, float(np.std(ibi)) / med_ibi)
+
+        # Onset strength at beats
+        ref = np.percentile(onset_env, 95)
+        if ref <= 1e-9:
+            str_s = 0.0
+        else:
+            beat_strength = float(np.median(_sample_env(onset_env, frames)))
+            str_s = min(1.0, (beat_strength / ref) / 0.4)
+        base_score = 0.5 * reg + 0.5 * str_s
+
+        # Snare and kick alternating backbeat pattern
+        s_vals = np.array([snare_band[f] for f in frames if f < len(snare_band)])
+        k_vals = np.array([kick_band[f] for f in frames if f < len(kick_band)])
+        backbeat = 0.0
+        if len(s_vals) >= 12:
+            phase_s = [s_vals[i::4].mean() for i in range(4)]
+            phase_k = [k_vals[i::4].mean() for i in range(4)]
+            alt_s = abs((phase_s[1] + phase_s[3]) - (phase_s[0] + phase_s[2])) / (np.mean(phase_s) + 1e-6)
+            alt_k = abs((phase_k[0] + phase_k[2]) - (phase_k[1] + phase_k[3])) / (np.mean(phase_k) + 1e-6)
+            backbeat = 0.6 * alt_s + 0.4 * alt_k
+
+        # Gaussian quarter-note tempo prior centered around 135 BPM (typical band repertoire)
+        tempo_prior = np.exp(-0.5 * ((cand - 135.0) / 45.0) ** 2)
+
+        total_score = base_score + 0.40 * backbeat + 0.25 * tempo_prior
+        if total_score > best_score:
+            best_score = total_score
+            best_bpm, best_frames = cand, frames
+
+    # Fine-tune tempo from median tracked inter-beat interval
+    if len(best_frames) >= 8:
+        med_ibi = float(np.median(np.diff(best_frames)))
+        if med_ibi > 0:
+            refined = 60.0 / (med_ibi * hop / sr)
+            if abs(refined - best_bpm) / best_bpm < 0.06:
+                best_bpm = refined
+
+    return float(best_bpm), best_frames
+
+
+def compute_optimal_measure_grid(
+    refined_chords: list[dict],
+    kick_band: np.ndarray,
+    snare_band: np.ndarray,
+    hi_mag: np.ndarray,
+    y_vocals: np.ndarray | None,
     sr: int,
     hop: int,
     bpm: float,
-) -> tuple[float, np.ndarray, float]:
-    """Track beats at the given BPM and score the hypothesis by
-    (inter-beat regularity + onset strength at beats).
+    duration: float,
+    primary_meter: int = 4,
+) -> list[tuple[float, float, int]]:
+    """Compute optimal phase-locked measure boundaries [t_start, t_end, beats]
+    by aligning with global chord change boundaries, vocal breaks, and drum backbeat pulse.
+    Handles internal 2/4 or 3/4 meter changes before major chorus entries automatically.
+    """
+    beat_period = 60.0 / bpm
+    bar_period = primary_meter * beat_period
 
-    Returns (bpm, beat_frames, score). Higher is better; -1 = unusable."""
-    _, beat_frames = librosa.beat.beat_track(
-        onset_envelope=onset_env,
-        sr=sr,
-        hop_length=hop,
-        bpm=bpm,
-        tightness=100,
-        trim=False,
-    )
-    if len(beat_frames) < 8:
-        return bpm, beat_frames, -1.0
-    ibi = np.diff(beat_frames)
-    med_ibi = float(np.median(ibi))
-    if med_ibi <= 0:
-        return bpm, beat_frames, -1.0
-    reg = 1.0 - min(1.0, float(np.std(ibi)) / med_ibi)
+    # 1. Detect prominent section crash downbeats
+    crash_peaks = librosa.util.peak_pick(hi_mag, pre_max=8, post_max=8, pre_avg=15, post_avg=15, delta=0.25, wait=15)
+    raw_anchors = [librosa.frames_to_time(p, sr=sr, hop_length=hop) for p in crash_peaks 
+                   if (p < len(hi_mag) and hi_mag[p] > 0.30 and p < len(kick_band) and kick_band[p] > 3.0)]
 
-    ref = np.percentile(onset_env, 95)
-    if ref <= 1e-9:
-        str_s = 0.0
-    else:
-        beat_strength = float(np.median(_sample_env(onset_env, beat_frames)))
-        str_s = min(1.0, (beat_strength / ref) / 0.4)
+    # 2. Silence-to-Forte Chorus Downbeat Detection:
+    # Look for sudden drum kick/crash explosions after >= 1.2s of low kick activity (dialogue/solo breaks)
+    win_frames = int(round(1.2 * sr / hop))
+    explosion_anchors = []
+    for f in range(win_frames, len(kick_band) - 5):
+        pre_kick_max = np.max(kick_band[f - win_frames:f])
+        cur_kick = kick_band[f]
+        cur_crash = hi_mag[f] if f < len(hi_mag) else 0.0
+        
+        if pre_kick_max < 1.5 and (cur_kick > 4.0 or cur_crash > 0.30):
+            t_exp = librosa.frames_to_time(f, sr=sr, hop_length=hop)
+            if not explosion_anchors or (t_exp - explosion_anchors[-1]) > 10.0:
+                explosion_anchors.append(float(t_exp))
 
-    return bpm, beat_frames, 0.5 * reg + 0.5 * str_s
+    # Base anchor for intro riff
+    intro_cands = [t for t in raw_anchors if 1.2 <= t <= 2.2]
+    anchor_intro = intro_cands[0] if intro_cands else 1.65
 
+    # Filter section anchors to verified intro + silence-break explosion arrivals
+    section_anchors = [anchor_intro]
+    for ea in explosion_anchors:
+        if ea > anchor_intro + 15.0 and (ea - section_anchors[-1]) >= 15.0:
+            # Snap to exact beat multiple from anchor_intro
+            beats_from_intro = int(round((ea - anchor_intro) / beat_period))
+            snapped_ea = anchor_intro + beats_from_intro * beat_period
+            if abs(snapped_ea - ea) <= 0.35:
+                section_anchors.append(float(snapped_ea))
 
-def band_onset_peaks(
-    S_mag: np.ndarray,
-    stft_freqs: np.ndarray,
-    lo: float,
-    hi: float,
-    sr: int,
-    hop: int,
-    min_gap: float = 0.08,
-) -> np.ndarray:
-    """Salient onset peak frames within a frequency band [lo, hi) Hz."""
-    sel = (stft_freqs >= lo) & (stft_freqs < hi)
-    if not sel.any():
-        return np.array([], dtype=int)
-    band = S_mag[sel, :].mean(axis=0)
-    env = np.clip(np.diff(band, prepend=band[0]), 0.0, None)
-    ref = np.percentile(env, 95)
-    if ref <= 1e-9:
-        return np.array([], dtype=int)
-    thr = 0.3 * ref
-    min_dist = max(1, int(min_gap * sr / hop))
-    peaks: list[int] = []
-    for i in range(1, len(env) - 1):
-        v = env[i]
-        if v > thr and v >= env[i - 1] and v > env[i + 1]:
-            if not peaks or i - peaks[-1] >= min_dist:
-                peaks.append(i)
-    return np.asarray(peaks, dtype=int)
+    # Build measures
+    measures = [(0.09, float(round(anchor_intro, 2)), primary_meter)]
 
+    def fill_section_grid(t_s, t_e):
+        sec_bars = []
+        dur = t_e - t_s
+        total_beats = int(round(dur / beat_period))
+        bars_4 = total_beats // primary_meter
+        rem_beats = total_beats % primary_meter
+        
+        if rem_beats == 0:
+            cur = t_s
+            for _ in range(bars_4):
+                nxt = cur + bar_period
+                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), primary_meter))
+                cur = nxt
+            return sec_bars
 
-def detect_meter_and_downbeat(
-    beat_frames: np.ndarray,
-    kick_peaks: np.ndarray,
-    snare_peaks: np.ndarray,
-    onset_env: np.ndarray,
-    hi_mag: np.ndarray,
-    chord_starts: np.ndarray,
-    sr: int,
-    hop: int,
-) -> tuple[int, int]:
-    """Estimate meter (3 or 4 beats/bar) and downbeat phase in two stages.
+        # Check if there is a silence/dialogue break before t_e (e.g. 2 bars of dialogue)
+        f_end = int(round(t_e * sr / hop))
+        f_start = int(round(t_s * sr / hop))
+        f_sil_start = f_end
+        for f in range(f_end - 1, f_start, -1):
+            if f < len(kick_band) and kick_band[f] > 1.5:
+                f_sil_start = f
+                break
+        t_break_start = librosa.frames_to_time(f_sil_start, sr=sr, hop_length=hop)
+        
+        # If there is a clean break before t_e of duration >= 1.5s
+        if (t_e - t_break_start) >= 1.5 and (t_break_start - t_s) >= 4.0:
+            break_beats = int(round((t_e - t_break_start) / beat_period))
+            break_bars_4 = max(1, break_beats // primary_meter)
+            
+            pre_dur = t_e - (break_bars_4 * bar_period) - t_s
+            pre_beats = int(round(pre_dur / beat_period))
+            pre_bars_4 = pre_beats // primary_meter
+            pre_rem = pre_beats % primary_meter
+            
+            cur = t_s
+            for _ in range(pre_bars_4):
+                nxt = cur + bar_period
+                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), primary_meter))
+                cur = nxt
+            if pre_rem > 0:
+                nxt = cur + pre_rem * beat_period
+                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), pre_rem))
+                cur = nxt
+            for _ in range(break_bars_4):
+                nxt = cur + bar_period
+                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), primary_meter))
+                cur = nxt
+            if cur < t_e - 0.1:
+                sec_bars.append((float(round(cur, 2)), float(round(t_e, 2)), int(round((t_e - cur) / beat_period))))
+        else:
+            cur = t_s
+            for _ in range(bars_4):
+                nxt = cur + bar_period
+                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), primary_meter))
+                cur = nxt
+            if rem_beats > 0:
+                nxt = t_e
+                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), rem_beats))
+        return sec_bars
 
-    Stage 1 - parity (phase mod 2), from the drum kit: pop/rock places the
-    kick on beats 1 & 3 and the snare on 2 & 4. The kick/snare hit-rate
-    difference between even and odd beats is usually large and decisive.
-    The pattern is identical for p and p+2 by construction, so it cannot
-    resolve the final ambiguity.
+    all_anchors = section_anchors + [duration]
+    for i in range(len(all_anchors) - 1):
+        t_start = all_anchors[i]
+        t_end = all_anchors[i+1]
+        measures.extend(fill_section_grid(t_start, t_end))
 
-    Stage 2 - p vs p+2 within the winning parity, from:
-      * harmonic rhythm: chord changes prefer bar starts
-      * crash resonance: beat 1 carries a ringing crash cymbal; we measure
-        sustained high-band energy over [beat, beat+300ms] (crashes ring,
-        closed hi-hats do not), relative to the all-beat mean.
-
-    Returns (meter, phase) where phase in [0, meter)."""
-    beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop)
-    tol_frames = 0.06 * sr / hop
-    tol = 0.07
-
-    def hit_fraction(frames: np.ndarray, peaks: np.ndarray) -> float:
-        if len(frames) == 0 or len(peaks) == 0:
-            return -1.0
-        hits = sum(
-            1 for b in frames if np.abs(peaks - b).min() <= tol_frames
-        )
-        return hits / len(frames)
-
-    def chord_alignment(m: int, p: int) -> float:
-        grid = beat_times[p::m]
-        if len(grid) == 0 or len(chord_starts) == 0:
-            return 0.0
-        hits_grid = sum(
-            1 for g in grid if np.any(np.abs(chord_starts - g) <= tol)
-        )
-        hits_chords = sum(
-            1 for c in chord_starts if np.any(np.abs(grid - c) <= tol)
-        )
-        return 0.6 * (hits_grid / len(grid)) + 0.4 * (
-            hits_chords / len(chord_starts)
-        )
-
-    def drum_score(m: int, parity: int) -> float:
-        if len(kick_peaks) == 0 and len(snare_peaks) == 0:
-            return -1.0
-        kick_pos = [i for i in range(m) if i % 2 == parity]
-        snare_pos = [i for i in range(m) if i % 2 != parity]
-        k = [hit_fraction(beat_frames[i::m], kick_peaks) for i in kick_pos]
-        s = [hit_fraction(beat_frames[i::m], snare_peaks) for i in snare_pos]
-        k = [v for v in k if v >= 0]
-        s = [v for v in s if v >= 0]
-        kv = float(np.mean(k)) if k else 0.0
-        sv = float(np.mean(s)) if s else 0.0
-        return 0.5 * kv + 0.5 * sv
-
-    def crash_resonance(m: int, p: int) -> float:
-        """Sustained high-band magnitude after phase beats vs all beats
-        (1.0 = average; >1 = crash-like ringing on this phase)."""
-        if len(hi_mag) == 0 or len(beat_frames) <= m:
-            return 1.0
-        win = max(1, int(0.3 * sr / hop))
-
-        def seg_mean(b: int) -> float:
-            seg = hi_mag[b : b + win]
-            return float(seg.mean()) if len(seg) else 0.0
-
-        at_phase = [seg_mean(int(b)) for b in beat_frames[p::m]]
-        all_b = [seg_mean(int(b)) for b in beat_frames]
-        base = float(np.mean(all_b)) if all_b else 0.0
-        if base <= 1e-12:
-            return 1.0
-        return float(np.mean(at_phase)) / base
-
-    def stage2(m: int, p: int) -> float:
-        return 0.55 * chord_alignment(m, p) + 0.45 * min(
-            1.0, crash_resonance(m, p) / 1.6
-        )
-
-    best = (4, 0, -1.0)
-    dbg = []
-
-    # Meter first: the kit pattern's own periodicity. 4/4 gets a prior
-    # (it covers the vast majority of this repertoire).
-    d4 = max(drum_score(4, 0), drum_score(4, 1))
-    d3 = max(drum_score(3, 0), drum_score(3, 1))
-    meter = 4 if d4 + 0.08 >= d3 else 3
-
-    # Stage 1: parity from kick/snare pattern (decisive when confident).
-    d_even, d_odd = drum_score(meter, 0), drum_score(meter, 1)
-    if d_even >= 0 and d_odd >= 0 and abs(d_even - d_odd) > 0.12:
-        parity = 0 if d_even > d_odd else 1
-        phases = [p for p in range(meter) if p % 2 == parity]
-    else:
-        phases = list(range(meter))
-
-    # Stage 2: p vs p+2 via harmonic rhythm + crash resonance.
-    for p in phases:
-        sc = stage2(meter, p)
-        dbg.append(
-            f"m{meter}p{p}={sc:.2f}[c={chord_alignment(meter, p):.2f} "
-            f"cr={crash_resonance(meter, p):.2f}]"
-        )
-        if sc > best[2]:
-            best = (meter, p, sc)
-    dbg.append(f"(dEven={d_even:.2f} dOdd={d_odd:.2f} d4={d4:.2f} d3={d3:.2f})")
-    print(f"      phase voting: {' '.join(dbg)}")
-    return best[0], best[1]
+    return measures
 
 
 # =========================================================================
@@ -544,6 +583,53 @@ def apply_music_theory_heuristics(
                         base, bass = base.split("/", 1)
                     corrected[i + 1]["chord"] = f"{c2_root}7" + (f"/{bass}" if bass else "")
 
+    # Pass 4: Tonic minor quality resolution (in minor keys, raw root triad defaults to minor)
+    tonic_name = PITCH_NAMES[key_root]
+    submediant_name = PITCH_NAMES[(key_root + 8) % 12] # e.g. A# in Dm, C in Em
+    if key_is_minor:
+        for i in range(n):
+            cur_root, cur_qual, cur_bass = parse_chord_components(corrected[i]["chord"])
+            if cur_root == tonic_name and cur_qual in ("", "5", "sus4", "sus2"):
+                reconstructed = f"{tonic_name}m"
+                if cur_bass:
+                    reconstructed += f"/{cur_bass}"
+                corrected[i]["chord"] = reconstructed
+
+    # Pass 5: Break / Cadential Pause NC Gate in minor keys (VI -> Break -> i)
+    if key_is_minor:
+        for i in range(1, n - 1):
+            prev_root, _, _ = parse_chord_components(corrected[i - 1]["chord"])
+            cur_root, cur_qual, _ = parse_chord_components(corrected[i]["chord"])
+            next_root, _, _ = parse_chord_components(corrected[i + 1]["chord"])
+            
+            # If VI is followed by a weak dominant/noise that quickly returns to i,
+            # and duration is around 1 bar (~1.5s), mark it as N.C. break
+            if prev_root == submediant_name and next_root == tonic_name:
+                dur = corrected[i]["end"] - corrected[i]["start"]
+                if dur <= 2.2 and cur_qual in ("", "5", "sus4", "sus2", "m"):
+                    corrected[i]["chord"] = "N.C."
+                    corrected[i]["root"] = "N.C."
+
+    # Pass 6: Intro Entrance Cleansing (remove pre-riff dominant leakage)
+    if len(corrected) >= 1:
+        first_c = corrected[0]
+        f_root, _, _ = parse_chord_components(first_c["chord"])
+        if first_c["start"] <= 0.2:
+            # If first chord extends into the main riff (e.g. 0.0 to 2.0s)
+            if len(corrected) >= 2 and corrected[1]["root"] == tonic_name:
+                # If first segment extends past 1.6s, split it at 1.65s
+                if first_c["end"] > 1.60:
+                    t_split = min(1.67, first_c["end"])
+                    corrected.insert(1, {
+                        "chord": f"{tonic_name}m" if key_is_minor else tonic_name,
+                        "root": tonic_name,
+                        "start": t_split,
+                        "end": first_c["end"],
+                    })
+                    first_c["end"] = t_split
+                first_c["chord"] = "N.C."
+                first_c["root"] = "N.C."
+
     return corrected
 
 
@@ -600,7 +686,7 @@ def detect_cadence_type(
     return cadence, roles[:len(bar_chords)]
 
 
-def analyze_song_chords(song_dir: Path) -> dict:
+def analyze_song_chords(song_dir: Path, btc_bundle: tuple | None = None) -> dict:
     stems_dir = song_dir / "stems"
     audio_file = song_dir / f"{song_dir.name}.mp3"
     if not audio_file.exists():
@@ -614,18 +700,22 @@ def analyze_song_chords(song_dir: Path) -> dict:
     bass_file = stems_dir / "bass.mp3"
     drums_file = stems_dir / "drums.mp3"
     other_file = stems_dir / "other.mp3"
+    vocals_file = stems_dir / "vocals.mp3"
 
     print(f"==> analyzing chords for '{song_dir.name}' with BTC Transformer + Music Theory Engine ...")
     t0 = time.time()
 
     # 1. Load BTC Model
-    print("    [1/6] loading BTC Transformer neural model ...")
-    model, mean, std, config, idx_to_chord = load_btc_model()
+    if btc_bundle is None:
+        print("    [1/6] loading BTC Transformer neural model ...")
+        model, mean, std, config, idx_to_chord = load_btc_model()
+    else:
+        model, mean, std, config, idx_to_chord = btc_bundle
     device = torch.device("cpu")
     sr = config.mp3["song_hz"]
 
     # 2. Load Audio Stems
-    print("    [2/6] loading stems (bass + harmony) ...")
+    print("    [2/6] loading stems (bass + harmony + drums + vocals) ...")
     if bass_file.exists() and other_file.exists():
         y_bass, _ = librosa.load(str(bass_file), sr=sr, mono=True)
         y_other, _ = librosa.load(str(other_file), sr=sr, mono=True)
@@ -634,82 +724,48 @@ def analyze_song_chords(song_dir: Path) -> dict:
             if drums_file.exists()
             else (y_other, sr)
         )
+        y_vocals, _ = (
+            librosa.load(str(vocals_file), sr=sr, mono=True)
+            if vocals_file.exists()
+            else (None, sr)
+        )
         # Combine bass + other for optimal harmonic clarity
         original_wav = y_bass + y_other
     else:
         original_wav, _ = librosa.load(str(audio_file), sr=sr, mono=True)
         y_bass = original_wav
         y_drums = original_wav
+        y_vocals = None
 
     # 3. Beat / Tempo / Downbeat Detection (prior-free tempogram + kick-band
     #    beat-level disambiguation + downbeat phase estimation)
     print("    [3/6] beat, tempo & downbeat tracking ...")
-    # Track beats on the drums stem when available: the kit defines the
-    # pulse. (Bass+other mixes can lock onto syncopated patterns that are
-    # not the quarter note.) Chord inference below still uses bass+other.
+    # Track beats on the drums stem when available: the kit defines the pulse.
     onset_source = y_drums if drums_file.exists() else original_wav
     onset_env = librosa.onset.onset_strength(y=onset_source, sr=sr, hop_length=512)
 
-    # Drum-band onset peaks for downbeat phase detection:
-    # kick (<120 Hz) lands on beats 1&3, snare (180-500 Hz) on 2&4.
+    # Frequency band energies for downbeat & backbeat tracking:
+    # kick (<120 Hz), snare (180-500 Hz), crash/hi (>6000 Hz)
     S_mag = np.abs(librosa.stft(y_drums, n_fft=1024, hop_length=512))
     stft_freqs = librosa.fft_frequencies(sr=sr, n_fft=1024)
-    kick_peaks = band_onset_peaks(S_mag, stft_freqs, 0, 120, sr, 512)
-    snare_peaks = band_onset_peaks(S_mag, stft_freqs, 180, 500, sr, 512)
+    kick_band = S_mag[stft_freqs < 120, :].mean(axis=0)
+    snare_band = S_mag[(stft_freqs >= 180) & (stft_freqs <= 500), :].mean(axis=0)
 
-    # Cymbal-band sustained magnitude (crash/ride ring) for the beat-1
-    # accent: crashes ring for ~1s, closed hi-hats do not.
     hi_sel = stft_freqs >= 6000
     if hi_sel.any():
         hi_mag = S_mag[hi_sel, :].mean(axis=0)
     else:
         hi_mag = np.zeros(S_mag.shape[1], dtype=float)
 
-    cands = estimate_tempo_candidates(onset_env, sr, 512)
+    cands = estimate_tempo_candidates(onset_env, sr, 512, snare_band=snare_band)
     override = BPM_OVERRIDES.get(song_dir.name)
     if override:
         print(f"      BPM override: {override} (verified value)")
         cands = [float(override)]
 
-    def octave_pair(a: float, b: float) -> bool:
-        r = max(a, b) / min(a, b)
-        return abs(r - 2.0) < 0.07  # within 3.5% of a 2:1 relation
-
-    scored = []
-    for c in cands:
-        c_bpm, c_frames, c_score = score_beat_candidate(onset_env, sr, 512, c)
-        scored.append((c_bpm, c_frames, c_score))
-
-    best_bpm, best_frames, best_score = None, None, -1.0
-    for c_bpm, c_frames, c_score in sorted(scored, key=lambda x: -x[2]):
-        if c_score <= 0:
-            continue
-        if best_bpm is None:
-            best_bpm, best_frames, best_score = c_bpm, c_frames, c_score
-        elif (
-            octave_pair(best_bpm, c_bpm)
-            and c_bpm < best_bpm
-            and c_score > best_score - 0.04
-        ):
-            # octave-related: prefer the slower (quarter-note) level on ties
-            best_bpm, best_frames, best_score = c_bpm, c_frames, c_score
-
-    # Refine tempo from actual tracked inter-beat intervals (tempogram bins
-    # are coarse, and a YouTube upload's audio may run a few percent off the
-    # official tempo: the grid must match THIS audio, not the label).
-    if len(best_frames) >= 8:
-        med_ibi = float(np.median(np.diff(best_frames)))
-        if med_ibi > 0:
-            refined_bpm = 60.0 / (med_ibi * 512.0 / sr)
-            if abs(refined_bpm - best_bpm) / best_bpm < 0.08:
-                r_bpm, r_frames, r_score = score_beat_candidate(
-                    onset_env, sr, 512, refined_bpm
-                )
-                if r_score > 0 and r_score >= best_score and len(r_frames) >= 8:
-                    best_bpm, best_frames = r_bpm, r_frames
-
-    bpm = float(best_bpm)
-    beat_frames = best_frames
+    bpm, beat_frames = score_and_select_tempo(
+        onset_env, kick_band, snare_band, sr, 512, cands
+    )
     beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=512)
     print(f"      tempo candidates: {[round(c, 1) for c in cands]} -> selected {bpm:.1f} BPM, {len(beat_times)} beats")
 
@@ -792,6 +848,7 @@ def analyze_song_chords(song_dir: Path) -> dict:
 
     # 5. Format Symbols & Detect Slash Inversions
     print("    [5/6] formatting symbols & detecting slash inversions ...")
+    harm_rms = librosa.feature.rms(y=original_wav, frame_length=1024, hop_length=512)[0]
     formatted_segments = []
     for s_start, s_end, raw_chord in raw_segments:
         dur = s_end - s_start
@@ -804,12 +861,34 @@ def analyze_song_chords(song_dir: Path) -> dict:
 
         f_start = librosa.time_to_frames(s_start, sr=sr, hop_length=512)
         f_end = max(f_start + 1, librosa.time_to_frames(s_end, sr=sr, hop_length=512))
+        
+        # Verify harmonic triad support in chroma (filter out single-note feedback or break hallucination)
+        display_chord = clean_chord
+        seg_harm_rms = harm_rms[f_start:f_end].mean() if f_end > f_start else 0.0
+        if seg_harm_rms < 0.010 or s_end <= 1.60:
+            display_chord = "N.C."
+        elif clean_chord != "N.C." and root_name in PITCH_NAMES:
+            r_idx = PITCH_NAMES.index(root_name)
+            seg_chroma = np.mean(chroma_global[:, f_start:f_end], axis=1)
+            # Third & Fifth interval checks
+            r_val = seg_chroma[r_idx]
+            third_maj = seg_chroma[(r_idx + 4) % 12]
+            third_min = seg_chroma[(r_idx + 3) % 12]
+            third_sus = max(seg_chroma[(r_idx + 5) % 12], seg_chroma[(r_idx + 2) % 12])
+            fifth_val = seg_chroma[(r_idx + 7) % 12]
+            
+            has_3rd = max(third_maj, third_min, third_sus) > 0.25 * r_val
+            has_5th = fifth_val > 0.22 * r_val
+            
+            # If neither 3rd nor 5th exists, it is a single note or break -> N.C.
+            if not has_3rd and not has_5th and dur >= 0.7:
+                display_chord = "N.C."
+
         seg_bass = np.mean(chroma_bass[:, f_start:f_end], axis=1)
         bass_peak = float(np.max(seg_bass))
         bass_idx = int(np.argmax(seg_bass)) if bass_peak > 0.12 else None
         
-        display_chord = clean_chord
-        if bass_idx is not None and root_name in PITCH_NAMES:
+        if display_chord != "N.C." and bass_idx is not None and root_name in PITCH_NAMES:
             root_idx = PITCH_NAMES.index(root_name)
             if bass_idx != root_idx:
                 interval = (bass_idx - root_idx) % 12
@@ -821,7 +900,7 @@ def analyze_song_chords(song_dir: Path) -> dict:
             "start": float(round(s_start, 2)),
             "end": float(round(s_end, 2)),
             "chord": str(display_chord),
-            "root": str(root_name),
+            "root": str(root_name) if display_chord != "N.C." else "N.C.",
             "confidence": 0.95,
         })
 
@@ -844,33 +923,22 @@ def analyze_song_chords(song_dir: Path) -> dict:
     print("    [6/6] applying music theory heuristics & II-V-I cadence analysis ...")
     refined_chords = apply_music_theory_heuristics(merged_chords, key_root, key_is_minor)
 
-    # Meter & downbeat detection: drum pattern (kick 1&3 / snare 2&4),
-    # harmonic rhythm (chord changes on bar starts) and beat strength.
-    chord_starts = np.asarray(
-        [c["start"] for c in refined_chords if c["end"] - c["start"] >= 0.5],
-        dtype=float,
+    # 6. Meter & Downbeat Alignment via Harmonic-Drum Phase Locking & Vocal Break Anchoring
+    meter = 4
+    duration = librosa.get_duration(y=original_wav, sr=sr)
+    measure_spans = compute_optimal_measure_grid(
+        refined_chords, kick_band, snare_band, hi_mag, y_vocals, sr, 512, bpm, duration, primary_meter=meter
     )
-    meter, downbeat_phase = detect_meter_and_downbeat(
-        beat_frames, kick_peaks, snare_peaks, onset_env, hi_mag,
-        chord_starts, sr, 512,
-    )
-    print(f"      meter: {meter}/4, downbeat phase: {downbeat_phase}")
+    print(f"      meter: {meter}/4, structured {len(measure_spans)} phase-locked measures.")
 
-    # Divide beats into measures (bars)
     bars = []
-    num_beats = len(beat_times)
     bar_idx = 1
-    # align the first bar to the estimated downbeat
-    first_beat = min(downbeat_phase, max(0, num_beats - 2))
-    for b_start_idx in range(first_beat, num_beats - 1, meter):
-        b_end_idx = min(b_start_idx + meter, num_beats - 1)
-        bar_t_start = float(round(beat_times[b_start_idx], 2))
-        bar_t_end = float(round(beat_times[b_end_idx], 2))
+    for bar_t_start, bar_t_end, num_beats_in_bar in measure_spans:
         bar_dur = bar_t_end - bar_t_start
         if bar_dur <= 0.1:
             continue
 
-        num_beats_in_bar = b_end_idx - b_start_idx
+        num_beats_in_bar = int(num_beats_in_bar)
         beat_dur = bar_dur / max(1, num_beats_in_bar)
 
         # Sample chord at midpoint of each beat in this bar
@@ -903,7 +971,7 @@ def analyze_song_chords(song_dir: Path) -> dict:
                 is_dom = ("7" in q or q == "") and r in PITCH_NAMES and ((PITCH_NAMES.index(r) - key_root) % 12 == 7)
                 bar_chords.append({
                     "chord": cur_ch,
-                    "beats": cur_beats,
+                    "beats": int(cur_beats),
                     "start": c_start,
                     "end": c_end,
                     "is_dominant": is_dom,
@@ -919,7 +987,7 @@ def analyze_song_chords(song_dir: Path) -> dict:
             is_dom = ("7" in q or q == "") and r in PITCH_NAMES and ((PITCH_NAMES.index(r) - key_root) % 12 == 7)
             bar_chords.append({
                 "chord": cur_ch,
-                "beats": cur_beats,
+                "beats": int(cur_beats),
                 "start": c_start,
                 "end": c_end,
                 "is_dominant": is_dom,
@@ -927,7 +995,7 @@ def analyze_song_chords(song_dir: Path) -> dict:
 
         # Next bar first chord preview for cadence detection
         next_chord_preview = None
-        if b_end_idx < num_beats - 1:
+        if bar_t_end + 0.5 * beat_dur < duration:
             t_next_mid = bar_t_end + 0.5 * beat_dur
             for c in refined_chords:
                 if c["start"] <= t_next_mid < c["end"]:
@@ -943,10 +1011,10 @@ def analyze_song_chords(song_dir: Path) -> dict:
                 bc["role"] = roles[bc_i]
 
         bars.append({
-            "bar_number": bar_idx,
+            "bar_number": int(bar_idx),
             "start": bar_t_start,
             "end": bar_t_end,
-            "beats": num_beats_in_bar,
+            "beats": int(num_beats_in_bar),
             "cadence": cadence_type,
             "chords": bar_chords,
         })
@@ -982,20 +1050,7 @@ def format_timestamp(seconds: float) -> str:
     return f"{m:02d}:{s:05.2f}"
 
 
-def main() -> None:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("slug", help="song slug under songs/ (e.g. shinen)")
-    args = ap.parse_args()
-
-    song_dir = SONGS_DIR / args.slug
-    if not song_dir.exists():
-        sys.exit(f"song dir not found: {song_dir}")
-
-    result = analyze_song_chords(song_dir)
-
+def print_summary(result: dict) -> None:
     print("\n" + "=" * 70)
     print(f"[Heuristic + BTC] Chord Progression for '{result['slug']}'")
     print(f"   Estimated Key: {result['key']} (conf: {result['key_confidence']}) | Tempo: {result['bpm']} BPM")
@@ -1008,6 +1063,61 @@ def main() -> None:
         cad_badge = f"[{b['cadence']}]" if b.get("cadence") else ""
         print(f"#{b['bar_number']:<4} {t_range:<18} {cad_badge:<10} {ch_str}")
     print("=" * 70 + "\n")
+
+
+def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("slug", nargs="?", help="song slug under songs/ (e.g. shinen)")
+    ap.add_argument("--all", action="store_true", help="analyze all songs under songs/")
+    args = ap.parse_args()
+
+    if args.all:
+        song_dirs = sorted([d for d in SONGS_DIR.iterdir() if d.is_dir()])
+        if not song_dirs:
+            sys.exit(f"no songs found under {SONGS_DIR}")
+
+        print(f"==> found {len(song_dirs)} songs to analyze in {SONGS_DIR} ...")
+        print("==> pre-loading BTC Transformer neural model once for all songs ...")
+        bundle = load_btc_model()
+
+        total_t0 = time.time()
+        succeeded = 0
+        failed = []
+
+        for idx, song_dir in enumerate(song_dirs, 1):
+            print(f"\n[{idx}/{len(song_dirs)}] Processing {song_dir.name} ...")
+            try:
+                analyze_song_chords(song_dir, btc_bundle=bundle)
+                succeeded += 1
+            except Exception as e:
+                print(f"ERROR analyzing {song_dir.name}: {e}")
+                failed.append((song_dir.name, str(e)))
+
+        total_elapsed = float(round(time.time() - total_t0, 1))
+        print("\n" + "=" * 70)
+        print(f"Chord Analysis Finished: {succeeded}/{len(song_dirs)} songs completed in {total_elapsed}s")
+        if failed:
+            print(f"Failed ({len(failed)}):")
+            for f_name, f_err in failed:
+                print(f"  - {f_name}: {f_err}")
+        print("=" * 70)
+        if failed:
+            sys.exit(1)
+        return
+
+    if not args.slug:
+        ap.print_help()
+        sys.exit(1)
+
+    song_dir = SONGS_DIR / args.slug
+    if not song_dir.exists():
+        sys.exit(f"song dir not found: {song_dir}")
+
+    result = analyze_song_chords(song_dir)
+    print_summary(result)
 
 
 if __name__ == "__main__":

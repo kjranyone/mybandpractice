@@ -54,6 +54,7 @@ export async function loadPractice(slug: string): Promise<PracticeData | null> {
     }
     const res = await fetch(
       `/api/songs/${encodeURIComponent(slug)}/practice`,
+      { cache: "no-cache" },
     );
     if (!res.ok) return null;
     return validate(await res.json());

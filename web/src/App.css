@@ -2432,11 +2432,24 @@
 
 /* —— Manage Songs: tabs & setlist management —— */
 
+.manage-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.manage-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .manage-tabs {
   display: flex;
   gap: 0.25rem;
-  padding: 0 0 0.75rem;
-  border-bottom: 1px solid var(--border);
 }
 
 .manage-tab {
