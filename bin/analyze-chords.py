@@ -399,9 +399,24 @@ def compute_optimal_measure_grid(
             if not explosion_anchors or (t_exp - explosion_anchors[-1]) > 10.0:
                 explosion_anchors.append(float(t_exp))
 
-    # Base anchor for intro riff
-    intro_cands = [t for t in raw_anchors if 1.2 <= t <= 2.2]
-    anchor_intro = intro_cands[0] if intro_cands else 1.65
+    # 3. Detect the first main full-band / drum entry (intro drop)
+    first_major_drop = 0.0
+    for f in range(min(len(kick_band), int(round(6.0 * sr / hop)))):
+        k = kick_band[f]
+        c = hi_mag[f] if f < len(hi_mag) else 0.0
+        if k > 3.0 or c > 0.30:
+            first_major_drop = librosa.frames_to_time(f, sr=sr, hop_length=hop)
+            break
+
+    # Determine if there is a pickup / count-in bar preceding the first drop
+    if first_major_drop >= bar_period * 0.5:
+        pickup_beats = max(1, int(round(first_major_drop / beat_period)))
+        anchor_intro = float(round(pickup_beats * beat_period, 2))
+        pickup_start = max(0.0, float(round(anchor_intro - pickup_beats * beat_period, 2)))
+        measures = [(pickup_start, anchor_intro, pickup_beats)]
+    else:
+        anchor_intro = 0.0
+        measures = []
 
     # Filter section anchors to verified intro + silence-break explosion arrivals
     section_anchors = [anchor_intro]
@@ -411,10 +426,7 @@ def compute_optimal_measure_grid(
             beats_from_intro = int(round((ea - anchor_intro) / beat_period))
             snapped_ea = anchor_intro + beats_from_intro * beat_period
             if abs(snapped_ea - ea) <= 0.35:
-                section_anchors.append(float(snapped_ea))
-
-    # Build measures
-    measures = [(0.09, float(round(anchor_intro, 2)), primary_meter)]
+                section_anchors.append(float(round(snapped_ea, 2)))
 
     def fill_section_grid(t_s, t_e):
         sec_bars = []
@@ -861,7 +873,7 @@ def analyze_song_chords(
         # Verify harmonic triad support in chroma (filter out single-note feedback or break hallucination)
         display_chord = clean_chord
         seg_harm_rms = harm_rms[f_start:f_end].mean() if f_end > f_start else 0.0
-        if seg_harm_rms < 0.010 or s_end <= 1.60:
+        if seg_harm_rms < 0.010:
             display_chord = "N.C."
         elif clean_chord != "N.C." and root_name in PITCH_NAMES:
             r_idx = PITCH_NAMES.index(root_name)
