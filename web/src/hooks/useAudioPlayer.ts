@@ -272,29 +272,64 @@ export function useAudioPlayer(songs: SongSummary[]) {
     }
   }, []);
 
-  const stopActiveSources = useCallback(() => {
-    for (const src of activeSourcesRef.current.values()) {
+  const stopActiveSources = useCallback((fadeMs = 8) => {
+    const ctx = audioCtxRef.current;
+    const g = graphNodesRef.current;
+    if (!ctx || !g) {
+      for (const src of activeSourcesRef.current.values()) {
+        try {
+          src.stop();
+          src.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+      activeSourcesRef.current.clear();
+      return;
+    }
+
+    const t = ctx.currentTime;
+    const fadeSec = fadeMs / 1000;
+
+    // Fast micro-fade out on all active gains to eliminate clicks/pops
+    for (const gain of g.stemGains.values()) {
+      gain.gain.cancelScheduledValues(t);
+      gain.gain.setValueAtTime(gain.gain.value, t);
+      gain.gain.linearRampToValueAtTime(0, t + fadeSec);
+    }
+    g.mixGain.gain.cancelScheduledValues(t);
+    g.mixGain.gain.setValueAtTime(g.mixGain.gain.value, t);
+    g.mixGain.gain.linearRampToValueAtTime(0, t + fadeSec);
+
+    const oldSources = Array.from(activeSourcesRef.current.values());
+    activeSourcesRef.current.clear();
+
+    for (const src of oldSources) {
       try {
-        src.stop();
-        src.disconnect();
+        src.stop(t + fadeSec + 0.002);
+        setTimeout(() => {
+          try {
+            src.disconnect();
+          } catch {
+            /* ignore */
+          }
+        }, fadeMs + 20);
       } catch {
         /* ignore */
       }
     }
-    activeSourcesRef.current.clear();
   }, []);
 
   const startSourcesAt = useCallback(
-    (offsetSec: number, targetBuffers?: DecodedSongBuffers) => {
+    (offsetSec: number, targetBuffers?: DecodedSongBuffers, fadeMs = 8) => {
       const ctx = getAudioContext();
       if (ctx.state === "suspended") void ctx.resume();
 
       const buffers = targetBuffers ?? loadedBuffersRef.current;
       if (!buffers) return;
 
-      stopActiveSources();
+      stopActiveSources(fadeMs);
       routeStemGains();
-      applyStemGains(stemLevelsRef.current);
 
       const song = currentRef.current;
       const g = graphNodesRef.current;
@@ -303,7 +338,8 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const dur = song?.durationSeconds || buffers.duration || durationRef.current || 1;
       const safeOffset = clamp(offsetSec, 0, dur);
 
-      const now = ctx.currentTime + 0.02; // 20ms lead time for sub-sample hardware sync
+      const fadeSec = fadeMs / 1000;
+      const now = ctx.currentTime + fadeSec + 0.002; // Start after micro-fade out
       startTimeRef.current = now;
       startOffsetRef.current = safeOffset;
       pausedTimeRef.current = safeOffset;
@@ -311,7 +347,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const hasStems = song?.stems && song.stems.length > 0 && buffers.stems.size > 0;
 
       if (hasStems) {
-        // Start all stems with exact sample clock synchronization
+        // Start all stems with exact sample clock synchronization and micro-fade in
         for (const [stemName, buf] of buffers.stems) {
           const src = ctx.createBufferSource();
           src.buffer = buf;
@@ -320,7 +356,6 @@ export function useAudioPlayer(songs: SongSummary[]) {
           let stemGain = g.stemGains.get(stemName);
           if (!stemGain) {
             stemGain = ctx.createGain();
-            stemGain.gain.value = stemLevelsRef.current[stemName] ?? 1;
             g.stemGains.set(stemName, stemGain);
             if (stemName === "drums" && pitchRef.current !== 0) {
               stemGain.connect(g.bypass);
@@ -329,21 +364,29 @@ export function useAudioPlayer(songs: SongSummary[]) {
             }
           }
 
+          const targetLevel = stemLevelsRef.current[stemName] ?? 1;
+          stemGain.gain.cancelScheduledValues(now);
+          stemGain.gain.setValueAtTime(0, now);
+          stemGain.gain.linearRampToValueAtTime(targetLevel, now + fadeSec);
+
           src.connect(stemGain);
           src.start(now, safeOffset);
           activeSourcesRef.current.set(stemName, src);
         }
       } else if (buffers.mix) {
-        // Fallback to stereo mix
+        // Fallback to stereo mix with micro-fade in
         const src = ctx.createBufferSource();
         src.buffer = buffers.mix;
         src.playbackRate.value = playbackRateRef.current;
+        g.mixGain.gain.cancelScheduledValues(now);
+        g.mixGain.gain.setValueAtTime(0, now);
+        g.mixGain.gain.linearRampToValueAtTime(1, now + fadeSec);
         src.connect(g.mixGain);
         src.start(now, safeOffset);
         activeSourcesRef.current.set("mix", src);
       }
     },
-    [applyStemGains, getAudioContext, routeStemGains, stopActiveSources],
+    [getAudioContext, routeStemGains, stopActiveSources],
   );
 
   const getComputedCurrentTime = useCallback(() => {
