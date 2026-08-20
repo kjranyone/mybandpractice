@@ -11,6 +11,7 @@ import { useMediaSession } from "./hooks/useMediaSession";
 import { useLyrics, useSongs } from "./hooks/useSongs";
 import { useSetlists } from "./hooks/useSetlists";
 import { useChords } from "./hooks/useChords";
+import { useSwipeDrawer } from "./hooks/useSwipeDrawer";
 import { transposeChord } from "./utils/chordStore";
 import type { SongSummary } from "./types";
 import { deleteNativeSong, isNative } from "./utils/nativeSongs";
@@ -179,6 +180,12 @@ export default function App() {
     playbackMode,
   ]);
 
+  useSwipeDrawer({
+    isOpen: listOpen,
+    onOpen: () => setListOpen(true),
+    onClose: () => setListOpen(false),
+  });
+
   if (loading) {
     return (
       <div className="boot">
@@ -212,6 +219,11 @@ export default function App() {
       >
         {listOpen ? "✕" : "☰"}
       </button>
+      <div
+        className={`sidebar-backdrop${listOpen ? " is-open" : ""}`}
+        onClick={() => setListOpen(false)}
+        aria-hidden="true"
+      />
       <div className="app-body">
         <SongList
           displaySongs={filtered}

@@ -2078,8 +2078,12 @@
   }
 }
 
-/* Mobile: song list becomes a fullscreen modal (opened via hamburger) */
+/* Mobile: song list becomes a slide-in drawer (opened via hamburger or swipe) */
 .songlist-toggle {
+  display: none;
+}
+
+.sidebar-backdrop {
   display: none;
 }
 
@@ -2095,29 +2099,68 @@
     position: fixed;
     top: 0.75rem;
     left: 0.75rem;
-    z-index: 51; /* above the fullscreen songlist modal */
-    width: 48px;
-    height: 48px;
+    z-index: 52; /* above the drawer and backdrop */
+    width: 44px;
+    height: 44px;
     border-radius: 12px;
     border: 1px solid var(--border-strong);
     background: rgba(10, 12, 16, 0.92);
     color: var(--text);
-    font-size: 1.25rem;
+    font-size: 1.2rem;
     line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  }
+
+  .songlist-toggle:hover {
+    background: var(--bg-hover);
+    border-color: var(--sc);
+  }
+
+  .songlist-toggle.is-open {
+    border-color: rgba(94, 234, 212, 0.4);
+    color: var(--sc);
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .sidebar-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .sidebar {
-    display: none;
+    display: flex;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(85vw, 340px);
+    max-width: 85vw;
+    z-index: 50;
+    border-right: 1px solid var(--border-strong);
+    background: rgba(12, 15, 20, 0.985);
+    box-shadow: 4px 0 32px rgba(0, 0, 0, 0.7);
+    padding-top: 4rem; /* keep room for the toggle button */
+    transform: translateX(-100%);
+    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    will-change: transform;
+    overflow-y: hidden;
   }
 
   .sidebar.is-open {
-    display: flex;
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    border: none;
-    background: rgba(10, 12, 16, 0.985);
-    padding-top: 4.25rem; /* keep room for the toggle/close button */
+    transform: translateX(0);
   }
 
   .main {
