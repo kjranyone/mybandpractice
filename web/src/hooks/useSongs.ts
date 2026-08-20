@@ -19,7 +19,7 @@ export function useSongs() {
         // songs/ lives in the app's external files dir (pushed via adb)
         setSongs(await listNativeSongs());
       } else {
-        const res = await fetch("/api/songs.json");
+        const res = await fetch("/api/songs.json", { cache: "no-cache" });
         if (!res.ok) throw new Error(`Failed to load songs (${res.status})`);
         setSongs((await res.json()) as SongSummary[]);
       }
@@ -43,46 +43,40 @@ export function useLyrics(slug: string | null) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchLyrics = useCallback(async () => {
     if (!slug) {
       setMarkdown(null);
       setError(null);
       return;
     }
 
-    let cancelled = false;
     setLoading(true);
     setError(null);
-    setMarkdown(null);
-
-    void (async () => {
-      try {
-        let markdown: string | null = null;
-        if (isNative()) {
-          markdown = await readNativeLyrics(slug);
-          if (markdown == null) throw new Error("Lyrics not found");
-        } else {
-          const res = await fetch(
-            `/api/songs/${encodeURIComponent(slug)}/lyrics.json`,
-          );
-          if (!res.ok) throw new Error("Lyrics not found");
-          markdown = ((await res.json()) as { markdown: string }).markdown;
-        }
-        if (!cancelled) setMarkdown(markdown);
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load lyrics");
-          setMarkdown(null);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
+    try {
+      let md: string | null = null;
+      if (isNative()) {
+        md = await readNativeLyrics(slug);
+        if (md == null) throw new Error("Lyrics not found");
+      } else {
+        const res = await fetch(
+          `/api/songs/${encodeURIComponent(slug)}/lyrics.json`,
+          { cache: "no-cache" },
+        );
+        if (!res.ok) throw new Error("Lyrics not found");
+        md = ((await res.json()) as { markdown: string }).markdown;
       }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+      setMarkdown(md);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load lyrics");
+      setMarkdown(null);
+    } finally {
+      setLoading(false);
+    }
   }, [slug]);
 
-  return { markdown, loading, error };
+  useEffect(() => {
+    void fetchLyrics();
+  }, [fetchLyrics]);
+
+  return { markdown, loading, error, reload: fetchLyrics };
 }

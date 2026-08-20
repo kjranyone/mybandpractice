@@ -291,7 +291,9 @@ export async function loadChords(slug: string): Promise<SongChordsData | null> {
     if (isNative()) {
       return validateChords(await readNativeJson(slug, "chords.json"));
     }
-    const res = await fetch(`/songs/${encodeURIComponent(slug)}/chords.json`);
+    const res = await fetch(`/songs/${encodeURIComponent(slug)}/chords.json`, {
+      cache: "no-cache",
+    });
     if (!res.ok) return null;
     return validateChords(await res.json());
   } catch {

@@ -115,9 +115,7 @@ export function useMarkers(slug: string | null) {
   const dirtyRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
 
-  // --- load on song switch ---
-  useEffect(() => {
-    let cancelled = false;
+  const fetchMarkers = useCallback(async () => {
     if (!slug) {
       dirtyRef.current = false;
       setState({ slug: null, loaded: true, markers: [], stanzaTags: [] });
@@ -130,22 +128,21 @@ export function useMarkers(slug: string | null) {
       markers: [],
       stanzaTags: [],
     });
-    void (async () => {
-      let data = await loadPractice(slug);
-      if (!data) data = readLegacy(slug); // migrate once, then persist
-      if (cancelled) return;
-      dirtyRef.current = data != null;
-      setState({
-        slug,
-        loaded: true,
-        markers: sortByTime(data?.markers ?? []),
-        stanzaTags: data?.stanzaTags ?? [],
-      });
-    })();
-    return () => {
-      cancelled = true;
-    };
+    let data = await loadPractice(slug);
+    if (!data) data = readLegacy(slug); // migrate once, then persist
+    dirtyRef.current = data != null;
+    setState({
+      slug,
+      loaded: true,
+      markers: sortByTime(data?.markers ?? []),
+      stanzaTags: data?.stanzaTags ?? [],
+    });
   }, [slug]);
+
+  // --- load on song switch ---
+  useEffect(() => {
+    void fetchMarkers();
+  }, [fetchMarkers]);
 
   // --- debounced save (only after real edits) ---
   useEffect(() => {
@@ -253,5 +250,6 @@ export function useMarkers(slug: string | null) {
     removeMarker,
     addStanzaTag,
     removeStanzaTag,
+    reload: fetchMarkers,
   };
 }

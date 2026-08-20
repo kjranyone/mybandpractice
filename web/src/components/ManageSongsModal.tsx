@@ -18,6 +18,7 @@ type Props = {
   onSaveSetlist: (setlist: Setlist) => Promise<boolean>;
   onRemoveSetlist: (id: string) => Promise<boolean>;
   onCreateSetlist: (name: string, songs?: string[]) => Setlist;
+  onRefreshAll?: () => Promise<void> | void;
 };
 
 export function ManageSongsModal({
@@ -30,10 +31,13 @@ export function ManageSongsModal({
   onSaveSetlist,
   onRemoveSetlist,
   onCreateSetlist,
+  onRefreshAll,
 }: Props) {
   const [tab, setTab] = useState<"songs" | "setlists">("songs");
   const [sizes, setSizes] = useState<Map<string, number> | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshed, setRefreshed] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [renameValue, setRenameValue] = useState("");
@@ -128,6 +132,35 @@ export function ManageSongsModal({
     if (addOpen === sl.id) setAddOpen(null);
   };
 
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshed(false);
+    try {
+      if (onRefreshAll) {
+        await onRefreshAll();
+      } else {
+        onLibraryChanged();
+      }
+      // Re-fetch storage sizes
+      const m = new Map<string, number>();
+      if (isNative()) {
+        for (const [k, v] of await getNativeSongStorage()) m.set(k, v);
+      } else {
+        const res = await fetch("/api/storage");
+        if (res.ok) {
+          const data = (await res.json()) as Record<string, number>;
+          for (const [k, v] of Object.entries(data)) m.set(k, v);
+        }
+      }
+      setSizes(m);
+      setRefreshed(true);
+      setTimeout(() => setRefreshed(false), 2000);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const activeSetlist = setlists.find((s) => s.id === expanded) ?? null;
   const addable = activeSetlist
     ? songs
@@ -143,7 +176,12 @@ export function ManageSongsModal({
         })
     : [];
 
-  const totalBytes = songs.reduce((a, s) => a + (sizes?.get(s.slug) ?? 0), 0);
+  const totalBytes = useMemo(() => {
+    if (!sizes) return 0;
+    let sum = 0;
+    for (const b of sizes.values()) sum += b;
+    return sum;
+  }, [sizes]);
 
   return (
     <Modal
@@ -174,13 +212,24 @@ export function ManageSongsModal({
             Setlists
           </button>
         </div>
-        <button
-          type="button"
-          className="manage-sync-btn"
-          onClick={onSyncFromPc}
-        >
-          ⇅ Sync
-        </button>
+        <div className="manage-toolbar-actions">
+          <button
+            type="button"
+            className="manage-sync-btn"
+            disabled={refreshing}
+            onClick={() => void handleRefresh()}
+            title="楽曲データ・キャッシュを最新に再読み込み"
+          >
+            {refreshing ? "↻ 読込中…" : refreshed ? "✓ 更新完了" : "↻ 再読み込み"}
+          </button>
+          <button
+            type="button"
+            className="manage-sync-btn"
+            onClick={onSyncFromPc}
+          >
+            ⇅ Sync
+          </button>
+        </div>
       </div>
 
         <div className="sync-body">
