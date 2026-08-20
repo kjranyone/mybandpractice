@@ -377,12 +377,12 @@ def compute_optimal_measure_grid(
     using Dynamic Harmonic-Percussion (DHP) 4-phase joint optimization.
     
     Scores each candidate downbeat phase phi in {0, 1, 2, 3} across:
-    1. Snare backbeat power on beats 2 & 4 vs beats 1 & 3
-    2. Harmonic rhythm transitions landing on beat 1 (downbeat)
+    1. Harmonic rhythm transitions landing on beat 1 (downbeat)
+    2. Snare backbeat power on beats 2 & 4 vs beats 1 & 3 during active drum sections
     3. Low-frequency kick drum energy on beat 1
     """
+    beat_period = 60.0 / bpm if bpm > 0 else 0.5
     if len(beat_times) < 8:
-        beat_period = 60.0 / bpm if bpm > 0 else 0.5
         measures = []
         cur = 0.0
         while cur < duration:
@@ -391,12 +391,12 @@ def compute_optimal_measure_grid(
             cur = nxt
         return measures
 
-    # Extract chord transition timestamps
+    # Extract chord transition timestamps (excluding very short glissandos)
     chord_changes = []
     prev_ch = None
     for c in refined_chords:
         ch = c.get("chord", "N.C.")
-        if ch != "N.C." and ch != prev_ch:
+        if ch != "N.C." and ch != prev_ch and (c.get("end", 0) - c.get("start", 0) >= 0.5):
             chord_changes.append(float(c["start"]))
             prev_ch = ch
 
@@ -422,24 +422,22 @@ def compute_optimal_measure_grid(
 
             if beat_in_bar == 0:
                 downbeat_times.append(t)
-                k_beat1.append(k)
-                s_beat1_3.append(s)
-            elif beat_in_bar == 2 and primary_meter == 4:
-                s_beat1_3.append(s)
-                k_other.append(k)
-            else:
-                s_beat2_4.append(s)
-                k_other.append(k)
 
-        # Snare Score: strong backbeat on 2 & 4
-        s24 = np.median(s_beat2_4) if s_beat2_4 else 0.001
-        s13 = np.median(s_beat1_3) if s_beat1_3 else 0.001
-        snare_ratio = float(s24 / max(s13, 1e-4))
-        snare_norm = min(1.0, max(0.0, (snare_ratio - 0.7) / 0.8))
+            # Only evaluate drum metrics on active drum beats
+            if (k + s) > 0.8:
+                if beat_in_bar in (0, 2):
+                    s_beat1_3.append(s)
+                    if beat_in_bar == 0:
+                        k_beat1.append(k)
+                    else:
+                        k_other.append(k)
+                else:
+                    s_beat2_4.append(s)
+                    k_other.append(k)
 
-        # Harmonic Score: chord changes near downbeats
+        # Harmonic Score: chord changes near downbeats (+-0.22s tolerance)
         harm_hits = 0
-        tolerance = 0.18
+        tolerance = 0.22
         for ct in chord_changes:
             if downbeat_times:
                 min_dist = min([abs(ct - dt) for dt in downbeat_times])
@@ -447,15 +445,22 @@ def compute_optimal_measure_grid(
                     harm_hits += 1
 
         harm_ratio = harm_hits / max(len(chord_changes), 1)
-        harm_norm = min(1.0, harm_ratio / 0.55)
+        harm_norm = min(1.0, harm_ratio / 0.50)
+
+        # Snare Score: strong backbeat on 2 & 4
+        s24 = np.median(s_beat2_4) if s_beat2_4 else 0.001
+        s13 = np.median(s_beat1_3) if s_beat1_3 else 0.001
+        snare_ratio = float(s24 / max(s13, 1e-4))
+        snare_norm = min(1.0, max(0.0, (snare_ratio - 0.7) / 0.8)) if len(s_beat2_4) >= 8 else 0.5
 
         # Kick Score: kick accent on downbeat
         k1 = np.median(k_beat1) if k_beat1 else 0.001
         k_oth = np.median(k_other) if k_other else 0.001
         kick_ratio = float(k1 / max(k_oth, 1e-4))
-        kick_norm = min(1.0, max(0.0, (kick_ratio - 0.8) / 0.7))
+        kick_norm = min(1.0, max(0.0, (kick_ratio - 0.8) / 0.7)) if len(k_beat1) >= 8 else 0.5
 
-        j_score = 0.45 * snare_norm + 0.40 * harm_norm + 0.15 * kick_norm
+        # Harmonic alignment is prioritized for intro and chord changes, balanced with drum groove
+        j_score = 0.55 * harm_norm + 0.30 * snare_norm + 0.15 * kick_norm
         phase_scores[phi] = j_score
 
     best_phi = max(phase_scores, key=phase_scores.get)
@@ -467,7 +472,8 @@ def compute_optimal_measure_grid(
     if best_phi > 0 and beat_times[best_phi] > 0.35:
         pickup_start = 0.0
         pickup_end = float(round(beat_times[best_phi], 2))
-        measures.append((pickup_start, pickup_end, best_phi))
+        pickup_beats = max(1, int(round(pickup_end / beat_period)))
+        measures.append((pickup_start, pickup_end, pickup_beats))
 
     # Main measure sequence
     total_beats = len(beat_times)
@@ -979,7 +985,7 @@ def analyze_song_chords(
         # Verify harmonic triad support in chroma (filter out single-note feedback or break hallucination)
         display_chord = clean_chord
         seg_harm_rms = harm_rms[f_start:f_end].mean() if f_end > f_start else 0.0
-        if seg_harm_rms < 0.010:
+        if seg_harm_rms < 0.002:
             display_chord = "N.C."
         elif clean_chord != "N.C." and root_name in PITCH_NAMES:
             r_idx = PITCH_NAMES.index(root_name)
@@ -991,11 +997,11 @@ def analyze_song_chords(
             third_sus = max(seg_chroma[(r_idx + 5) % 12], seg_chroma[(r_idx + 2) % 12])
             fifth_val = seg_chroma[(r_idx + 7) % 12]
             
-            has_3rd = max(third_maj, third_min, third_sus) > 0.25 * r_val
-            has_5th = fifth_val > 0.22 * r_val
+            has_3rd = max(third_maj, third_min, third_sus) > 0.15 * r_val
+            has_5th = fifth_val > 0.15 * r_val
             
             # If neither 3rd nor 5th exists, it is a single note or break -> N.C.
-            if not has_3rd and not has_5th and dur >= 0.7:
+            if not has_3rd and not has_5th and dur >= 1.0:
                 display_chord = "N.C."
 
         seg_bass = np.mean(chroma_bass[:, f_start:f_end], axis=1)
