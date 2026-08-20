@@ -366,134 +366,157 @@ def compute_optimal_measure_grid(
     kick_band: np.ndarray,
     snare_band: np.ndarray,
     hi_mag: np.ndarray,
-    y_vocals: np.ndarray | None,
+    beat_times: np.ndarray,
     sr: int,
     hop: int,
     bpm: float,
     duration: float,
     primary_meter: int = 4,
+    meta_phase: int | None = None,
 ) -> list[tuple[float, float, int]]:
     """Compute optimal phase-locked measure boundaries [t_start, t_end, beats]
-    by aligning with global chord change boundaries, vocal breaks, and drum backbeat pulse.
-    Handles internal 2/4 or 3/4 meter changes before major chorus entries automatically.
+    using Dynamic Harmonic-Percussion (DHP) 4-phase joint optimization.
+    
+    Scores each candidate downbeat phase phi in {0, 1, 2, 3} across:
+    1. Snare backbeat power on beats 2 & 4 vs beats 1 & 3 during active drum sections
+    2. Section entrance / drum drop onsets landing on beat 1
+    3. Harmonic rhythm transitions landing on beat 1 (downbeat)
+    4. Low-frequency kick drum energy on beat 1
     """
-    beat_period = 60.0 / bpm
-    bar_period = primary_meter * beat_period
-
-    # 1. Detect prominent section crash downbeats
-    crash_peaks = librosa.util.peak_pick(hi_mag, pre_max=8, post_max=8, pre_avg=15, post_avg=15, delta=0.25, wait=15)
-    raw_anchors = [librosa.frames_to_time(p, sr=sr, hop_length=hop) for p in crash_peaks 
-                   if (p < len(hi_mag) and hi_mag[p] > 0.30 and p < len(kick_band) and kick_band[p] > 3.0)]
-
-    # 2. Silence-to-Forte Chorus Downbeat Detection:
-    # Look for sudden drum kick/crash explosions after >= 1.2s of low kick activity (dialogue/solo breaks)
-    win_frames = int(round(1.2 * sr / hop))
-    explosion_anchors = []
-    for f in range(win_frames, len(kick_band) - 5):
-        pre_kick_max = np.max(kick_band[f - win_frames:f])
-        cur_kick = kick_band[f]
-        cur_crash = hi_mag[f] if f < len(hi_mag) else 0.0
-        
-        if pre_kick_max < 1.5 and (cur_kick > 4.0 or cur_crash > 0.30):
-            t_exp = librosa.frames_to_time(f, sr=sr, hop_length=hop)
-            if not explosion_anchors or (t_exp - explosion_anchors[-1]) > 10.0:
-                explosion_anchors.append(float(t_exp))
-
-    # 3. Detect the first main full-band / drum entry (intro drop)
-    first_major_drop = 0.0
-    for f in range(min(len(kick_band), int(round(6.0 * sr / hop)))):
-        k = kick_band[f]
-        c = hi_mag[f] if f < len(hi_mag) else 0.0
-        if k > 3.0 or c > 0.30:
-            first_major_drop = librosa.frames_to_time(f, sr=sr, hop_length=hop)
-            break
-
-    # Determine if there is a pickup / count-in bar preceding the first drop
-    if first_major_drop >= bar_period * 0.5:
-        pickup_beats = max(1, int(round(first_major_drop / beat_period)))
-        anchor_intro = float(round(pickup_beats * beat_period, 2))
-        pickup_start = max(0.0, float(round(anchor_intro - pickup_beats * beat_period, 2)))
-        measures = [(pickup_start, anchor_intro, pickup_beats)]
-    else:
-        anchor_intro = 0.0
+    beat_period = 60.0 / bpm if bpm > 0 else 0.5
+    if len(beat_times) < 8:
         measures = []
+        cur = 0.0
+        while cur < duration:
+            nxt = min(duration, cur + primary_meter * beat_period)
+            measures.append((float(round(cur, 2)), float(round(nxt, 2)), primary_meter))
+            cur = nxt
+        return measures
 
-    # Filter section anchors to verified intro + silence-break explosion arrivals
-    section_anchors = [anchor_intro]
-    for ea in explosion_anchors:
-        if ea > anchor_intro + 15.0 and (ea - section_anchors[-1]) >= 15.0:
-            # Snap to exact beat multiple from anchor_intro
-            beats_from_intro = int(round((ea - anchor_intro) / beat_period))
-            snapped_ea = anchor_intro + beats_from_intro * beat_period
-            if abs(snapped_ea - ea) <= 0.35:
-                section_anchors.append(float(round(snapped_ea, 2)))
+    # Extract chord transition timestamps (excluding very short glissandos)
+    chord_changes = []
+    prev_ch = None
+    for c in refined_chords:
+        ch = c.get("chord", "N.C.")
+        if ch != "N.C." and ch != prev_ch and (c.get("end", 0) - c.get("start", 0) >= 0.5):
+            chord_changes.append(float(c["start"]))
+            prev_ch = ch
 
-    def fill_section_grid(t_s, t_e):
-        sec_bars = []
-        dur = t_e - t_s
-        total_beats = int(round(dur / beat_period))
-        bars_4 = total_beats // primary_meter
-        rem_beats = total_beats % primary_meter
-        
-        if rem_beats == 0:
-            cur = t_s
-            for _ in range(bars_4):
-                nxt = cur + bar_period
-                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), primary_meter))
-                cur = nxt
-            return sec_bars
+    # Detect Section Entrance / Drum Drop beats (sudden energy jumps)
+    drum_energy = kick_band + snare_band
+    drop_indices = []
+    for b_i in range(1, len(beat_times)):
+        f_prev = int(round(beat_times[b_i - 1] * sr / hop))
+        f_cur = int(round(beat_times[b_i] * sr / hop))
+        if f_cur < len(drum_energy):
+            e_prev = drum_energy[f_prev] if f_prev < len(drum_energy) else 0.0
+            e_cur = drum_energy[f_cur]
+            if e_cur >= 3.0 and e_prev < 1.2:
+                drop_indices.append(b_i)
 
-        # Check if there is a silence/dialogue break before t_e (e.g. 2 bars of dialogue)
-        f_end = int(round(t_e * sr / hop))
-        f_start = int(round(t_s * sr / hop))
-        f_sil_start = f_end
-        for f in range(f_end - 1, f_start, -1):
-            if f < len(kick_band) and kick_band[f] > 1.5:
-                f_sil_start = f
-                break
-        t_break_start = librosa.frames_to_time(f_sil_start, sr=sr, hop_length=hop)
-        
-        # If there is a clean break before t_e of duration >= 1.5s
-        if (t_e - t_break_start) >= 1.5 and (t_break_start - t_s) >= 4.0:
-            break_beats = int(round((t_e - t_break_start) / beat_period))
-            break_bars_4 = max(1, break_beats // primary_meter)
-            
-            pre_dur = t_e - (break_bars_4 * bar_period) - t_s
-            pre_beats = int(round(pre_dur / beat_period))
-            pre_bars_4 = pre_beats // primary_meter
-            pre_rem = pre_beats % primary_meter
-            
-            cur = t_s
-            for _ in range(pre_bars_4):
-                nxt = cur + bar_period
-                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), primary_meter))
-                cur = nxt
-            if pre_rem > 0:
-                nxt = cur + pre_rem * beat_period
-                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), pre_rem))
-                cur = nxt
-            for _ in range(break_bars_4):
-                nxt = cur + bar_period
-                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), primary_meter))
-                cur = nxt
-            if cur < t_e - 0.1:
-                sec_bars.append((float(round(cur, 2)), float(round(t_e, 2)), int(round((t_e - cur) / beat_period))))
+    # 1. 4-Phase Objective Evaluation
+    phase_scores = {}
+    for phi in range(primary_meter):
+        s_beat1_3 = []
+        s_beat2_4 = []
+        k_beat1 = []
+        k_other = []
+        downbeat_times = []
+
+        for idx, t in enumerate(beat_times):
+            if idx < phi:
+                continue
+            beat_in_bar = (idx - phi) % primary_meter
+            f = int(round(t * sr / hop))
+            if f >= len(kick_band):
+                continue
+
+            k = float(kick_band[f])
+            s = float(snare_band[f])
+
+            if beat_in_bar == 0:
+                downbeat_times.append(t)
+
+            # Only evaluate drum metrics on active drum beats
+            if (k + s) > 0.8:
+                if beat_in_bar in (0, 2):
+                    s_beat1_3.append(s)
+                    if beat_in_bar == 0:
+                        k_beat1.append(k)
+                    else:
+                        k_other.append(k)
+                else:
+                    s_beat2_4.append(s)
+                    k_other.append(k)
+
+        # Harmonic Score: chord changes near downbeats (+-0.22s tolerance)
+        harm_hits = 0
+        tolerance = 0.22
+        for ct in chord_changes:
+            if downbeat_times:
+                min_dist = min([abs(ct - dt) for dt in downbeat_times])
+                if min_dist <= tolerance:
+                    harm_hits += 1
+
+        harm_ratio = harm_hits / max(len(chord_changes), 1)
+        harm_norm = min(1.0, harm_ratio / 0.50)
+
+        # Snare Score: strong backbeat on 2 & 4
+        s24 = np.median(s_beat2_4) if s_beat2_4 else 0.001
+        s13 = np.median(s_beat1_3) if s_beat1_3 else 0.001
+        snare_ratio = float(s24 / max(s13, 1e-4))
+        snare_norm = min(1.0, max(0.0, (snare_ratio - 0.7) / 0.8)) if len(s_beat2_4) >= 8 else 0.5
+
+        # Kick Score: kick accent on downbeat
+        k1 = np.median(k_beat1) if k_beat1 else 0.001
+        k_oth = np.median(k_other) if k_other else 0.001
+        kick_ratio = float(k1 / max(k_oth, 1e-4))
+        kick_norm = min(1.0, max(0.0, (kick_ratio - 0.8) / 0.7)) if len(k_beat1) >= 8 else 0.5
+
+        # Section Drop Accent: section entrances landing on beat 1
+        drop_hits = sum(1 for d_idx in drop_indices if (d_idx - phi) % primary_meter == 0) if drop_indices else 0
+        drop_norm = drop_hits / max(1, len(drop_indices)) if drop_indices else 0.5
+
+        # Composite score
+        j_score = 0.40 * snare_norm + 0.25 * harm_norm + 0.15 * kick_norm + 0.20 * drop_norm
+        phase_scores[phi] = j_score
+
+    if meta_phase is not None and 0 <= meta_phase < primary_meter:
+        best_phi = meta_phase
+        print(f"      using metadata downbeat_phase override: phi={best_phi} (t={beat_times[best_phi]:.2f}s)")
+    else:
+        best_phi = max(phase_scores, key=phase_scores.get)
+        print(f"      DHP 4-Phase Scores: {{ {', '.join([f'phi={p}: {v:.3f}' for p, v in phase_scores.items()])} }} -> selected phi={best_phi} (t={beat_times[best_phi]:.2f}s)")
+
+    # 2. Build dynamic measure spans from beat_times
+    measures: list[tuple[float, float, int]] = []
+
+    # Handle intro pickup if best_phi > 0
+    if best_phi > 0 and beat_times[best_phi] > 0.35:
+        pickup_start = 0.0
+        pickup_end = float(round(beat_times[best_phi], 2))
+        pickup_beats = max(1, int(round(pickup_end / beat_period)))
+        measures.append((pickup_start, pickup_end, pickup_beats))
+
+    # Main measure sequence
+    total_beats = len(beat_times)
+    idx = best_phi
+    while idx + primary_meter <= total_beats:
+        m_start = float(round(beat_times[idx], 2))
+        if idx + primary_meter < total_beats:
+            m_end = float(round(beat_times[idx + primary_meter], 2))
         else:
-            cur = t_s
-            for _ in range(bars_4):
-                nxt = cur + bar_period
-                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), primary_meter))
-                cur = nxt
-            if rem_beats > 0:
-                nxt = t_e
-                sec_bars.append((float(round(cur, 2)), float(round(nxt, 2)), rem_beats))
-        return sec_bars
+            m_end = float(round(duration, 2))
 
-    all_anchors = section_anchors + [duration]
-    for i in range(len(all_anchors) - 1):
-        t_start = all_anchors[i]
-        t_end = all_anchors[i+1]
-        measures.extend(fill_section_grid(t_start, t_end))
+        measures.append((m_start, m_end, primary_meter))
+        idx += primary_meter
+
+    # Handle trailing remainder beats
+    if idx < total_beats:
+        rem_beats = total_beats - idx
+        m_start = float(round(beat_times[idx], 2))
+        m_end = float(round(duration, 2))
+        measures.append((m_start, m_end, rem_beats))
 
     return measures
 
@@ -985,7 +1008,7 @@ def analyze_song_chords(
         # Verify harmonic triad support in chroma (filter out single-note feedback or break hallucination)
         display_chord = clean_chord
         seg_harm_rms = harm_rms[f_start:f_end].mean() if f_end > f_start else 0.0
-        if seg_harm_rms < 0.010:
+        if seg_harm_rms < 0.002:
             display_chord = "N.C."
         elif clean_chord != "N.C." and root_name in PITCH_NAMES:
             r_idx = PITCH_NAMES.index(root_name)
@@ -997,11 +1020,11 @@ def analyze_song_chords(
             third_sus = max(seg_chroma[(r_idx + 5) % 12], seg_chroma[(r_idx + 2) % 12])
             fifth_val = seg_chroma[(r_idx + 7) % 12]
             
-            has_3rd = max(third_maj, third_min, third_sus) > 0.25 * r_val
-            has_5th = fifth_val > 0.22 * r_val
+            has_3rd = max(third_maj, third_min, third_sus) > 0.15 * r_val
+            has_5th = fifth_val > 0.15 * r_val
             
             # If neither 3rd nor 5th exists, it is a single note or break -> N.C.
-            if not has_3rd and not has_5th and dur >= 0.7:
+            if not has_3rd and not has_5th and dur >= 1.0:
                 display_chord = "N.C."
 
         seg_bass = np.mean(chroma_bass[:, f_start:f_end], axis=1)
@@ -1047,7 +1070,7 @@ def analyze_song_chords(
     meter = 4
     duration = librosa.get_duration(y=original_wav, sr=sr)
     measure_spans = compute_optimal_measure_grid(
-        refined_chords, kick_band, snare_band, hi_mag, y_vocals, sr, 512, bpm, duration, primary_meter=meter
+        refined_chords, kick_band, snare_band, hi_mag, beat_times, sr, 512, bpm, duration, primary_meter=meter, meta_phase=meta_override.get("downbeat_phase")
     )
     print(f"      meter: {meter}/4, structured {len(measure_spans)} phase-locked measures.")
 
