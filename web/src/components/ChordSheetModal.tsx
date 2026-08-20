@@ -178,13 +178,23 @@ export function ChordSheetModal({
     return { activeBarNum: null, activeChordKey: null };
   }, [bars, currentTime]);
 
-  // Auto-scroll to active bar
+  const isInitialScrollRef = useRef(true);
+
+  useEffect(() => {
+    isInitialScrollRef.current = true;
+  }, [song?.slug]);
+
+  // Auto-scroll to active bar: instant on initial modal open, smooth during playback
   useEffect(() => {
     if (autoScroll && activeBarRef.current && containerRef.current) {
+      const isInitial = isInitialScrollRef.current;
       activeBarRef.current.scrollIntoView({
-        behavior: "smooth",
+        behavior: isInitial ? "instant" : "smooth",
         block: "center",
       });
+      if (isInitial && activeBarNum != null) {
+        isInitialScrollRef.current = false;
+      }
     }
   }, [activeBarNum, autoScroll]);
 
