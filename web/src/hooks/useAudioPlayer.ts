@@ -58,10 +58,10 @@ type DecodedSongBuffers = {
 // Maximum number of full song buffers to keep in memory (LRU)
 const MAX_CACHE_SONGS = 6;
 
-/** Fast-fetch the initial head chunk (first 128KB ~ 8-10 seconds) for ultra-fast instant playback start */
+/** Fast-fetch the initial head chunk (first 384KB ~ 25 seconds) for instant playback start */
 async function fetchHeadChunk(
   url: string,
-  maxBytes = 128 * 1024,
+  maxBytes = 384 * 1024,
   signal?: AbortSignal,
 ): Promise<ArrayBuffer | null> {
   try {
@@ -160,6 +160,8 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const activeSourcesRef = useRef<Map<string, AudioBufferSourceNode>>(new Map());
   const loadAbortRef = useRef<AbortController | null>(null);
   const loadReqIdRef = useRef(0);
+  const fullBufferPromiseRef = useRef<Promise<DecodedSongBuffers | null> | null>(null);
+  const pendingSeekRef = useRef<number | null>(null);
 
   // Playback tracking timestamps
   const startTimeRef = useRef(0); // ctx.currentTime when playback started
@@ -522,7 +524,10 @@ export function useAudioPlayer(songs: SongSummary[]) {
       };
 
       // 2. BACKGROUND: Trigger full buffer download and seamless replacement
-      void fetchFullSongBuffers(song, abortCtrl.signal)
+      const fullPromise = fetchFullSongBuffers(song, abortCtrl.signal);
+      fullBufferPromiseRef.current = fullPromise;
+
+      void fullPromise
         .then((fullResult) => {
           if (!fullResult || reqId !== loadReqIdRef.current) return;
           setBuffered(1);
@@ -532,6 +537,16 @@ export function useAudioPlayer(songs: SongSummary[]) {
           loadedBuffersRef.current = fullResult;
           setDuration(fullResult.duration);
           durationRef.current = fullResult.duration;
+
+          // If there was a pending seek waiting for full buffer, execute it immediately!
+          if (pendingSeekRef.current !== null) {
+            const targetSeek = pendingSeekRef.current;
+            pendingSeekRef.current = null;
+            if (playingRef.current && currentRef.current?.slug === song.slug) {
+              startSourcesAt(targetSeek, fullResult);
+            }
+            return;
+          }
 
           // If currently playing on head buffer, seamlessly promote to full buffer at current position
           if (prevHead?.isHeadOnly && playingRef.current && currentRef.current?.slug === song.slug) {
@@ -692,7 +707,34 @@ export function useAudioPlayer(songs: SongSummary[]) {
       setCurrentTime(targetTime);
 
       if (playingRef.current) {
-        startSourcesAt(targetTime);
+        const curBuf = loadedBuffersRef.current;
+        let availableDur = dur;
+        if (curBuf?.isHeadOnly) {
+          availableDur = 0;
+          for (const buf of curBuf.stems.values()) {
+            if (buf.duration > availableDur) availableDur = buf.duration;
+          }
+          if (curBuf.mix && curBuf.mix.duration > availableDur) {
+            availableDur = curBuf.mix.duration;
+          }
+        }
+
+        // If target seek is within currently loaded buffer, seek immediately!
+        if (!curBuf?.isHeadOnly || targetTime < Math.max(1, availableDur - 1)) {
+          pendingSeekRef.current = null;
+          startSourcesAt(targetTime);
+        } else {
+          // Target seek is beyond head buffer: await full buffer to start seamlessly
+          pendingSeekRef.current = targetTime;
+          if (fullBufferPromiseRef.current) {
+            void fullBufferPromiseRef.current.then((fullBuf) => {
+              if (fullBuf && pendingSeekRef.current === targetTime && playingRef.current) {
+                pendingSeekRef.current = null;
+                startSourcesAt(targetTime, fullBuf);
+              }
+            });
+          }
+        }
       }
     },
     [startSourcesAt],
