@@ -11,6 +11,7 @@ import { useMediaSession } from "./hooks/useMediaSession";
 import { useLyrics, useSongs } from "./hooks/useSongs";
 import { useSetlists } from "./hooks/useSetlists";
 import { useChords } from "./hooks/useChords";
+import { useSwipeDrawer } from "./hooks/useSwipeDrawer";
 import { transposeChord } from "./utils/chordStore";
 import type { SongSummary } from "./types";
 import { deleteNativeSong, isNative } from "./utils/nativeSongs";
@@ -33,7 +34,13 @@ export default function App() {
   const { songs, loading, error, reload } = useSongs();
   const setlistState = useSetlists();
   const [query, setQuery] = useState("");
-  const [listOpen, setListOpen] = useState(false);
+  // Auto-open song list drawer on initial launch in responsive/mobile layouts (<= 900px)
+  const [listOpen, setListOpen] = useState(() => {
+    if (typeof window !== "undefined") {
+      return window.innerWidth <= 900;
+    }
+    return false;
+  });
   const [manageOpen, setManageOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [chordSheetOpen, setChordSheetOpen] = useState(false);
@@ -179,6 +186,12 @@ export default function App() {
     playbackMode,
   ]);
 
+  useSwipeDrawer({
+    isOpen: listOpen,
+    onOpen: () => setListOpen(true),
+    onClose: () => setListOpen(false),
+  });
+
   if (loading) {
     return (
       <div className="boot">
@@ -212,6 +225,11 @@ export default function App() {
       >
         {listOpen ? "✕" : "☰"}
       </button>
+      <div
+        className={`sidebar-backdrop${listOpen ? " is-open" : ""}`}
+        onClick={() => setListOpen(false)}
+        aria-hidden="true"
+      />
       <div className="app-body">
         <SongList
           displaySongs={filtered}

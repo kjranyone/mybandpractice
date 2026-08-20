@@ -1,5 +1,5 @@
 import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
-import { clamp, volumeToDbLabel } from "../utils/format";
+import { clamp } from "../utils/format";
 
 type Props = {
   volume: number;
@@ -18,7 +18,7 @@ export function VolumeFader({
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const display = muted ? 0 : volume;
-  const pct = display * 100;
+  const pct = Math.round(display * 100);
 
   const setFromClientY = useCallback(
     (clientY: number) => {
@@ -45,63 +45,57 @@ export function VolumeFader({
   };
 
   return (
-    <div className={`vol-fader${disabled ? " is-disabled" : ""}`}>
+    <div className={`mx-fader mx-fader-master${disabled ? " is-disabled" : ""}`}>
       <button
         type="button"
-        className={`vol-mute${muted || volume === 0 ? " is-muted" : ""}`}
+        className={`mx-fader-mute mono${muted || volume === 0 ? " is-muted" : ""}`}
         onClick={onToggleMute}
         disabled={disabled}
-        aria-label={muted ? "Unmute" : "Mute"}
-        title={muted ? "Unmute" : "Mute"}
+        aria-label={muted || volume === 0 ? "Unmute Master" : "Mute Master"}
+        title={muted || volume === 0 ? "Unmute Master" : "Mute Master"}
       >
-        {muted || volume === 0 ? "M" : "VOL"}
+        M
       </button>
 
-      <div className="vol-fader-meter">
-        <div
-          ref={trackRef}
-          className="vol-fader-track"
-          role="slider"
-          aria-label="Volume"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(display * 100)}
-          aria-valuetext={`${volumeToDbLabel(display)} dB`}
-          tabIndex={disabled ? -1 : 0}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={(e) => {
-            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-              e.currentTarget.releasePointerCapture(e.pointerId);
-            }
-          }}
-          onKeyDown={(e) => {
-            if (disabled) return;
-            if (e.key === "ArrowUp") {
-              e.preventDefault();
-              onVolume(clamp(volume + 0.02, 0, 1));
-            } else if (e.key === "ArrowDown") {
-              e.preventDefault();
-              onVolume(clamp(volume - 0.02, 0, 1));
-            }
-          }}
-        >
-          <div className="vol-fader-fill" style={{ height: `${pct}%` }} />
-          <div className="vol-fader-thumb" style={{ bottom: `${pct}%` }} />
-          <div className="vol-fader-ticks" aria-hidden>
-            <span />
-            <span />
-            <span />
-            <span />
-            <span />
-          </div>
+      <div
+        ref={trackRef}
+        className="mx-fader-track mx-master-track"
+        role="slider"
+        aria-label="Master volume"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct}
+        tabIndex={disabled ? -1 : 0}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={(e) => {
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }
+        }}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === "ArrowUp") {
+            e.preventDefault();
+            onVolume(clamp(volume + 0.02, 0, 1));
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            onVolume(clamp(volume - 0.02, 0, 1));
+          }
+        }}
+      >
+        <div className="mx-fader-fill mx-master-fill" style={{ height: `${pct}%` }} />
+        <div className="mx-fader-thumb" style={{ bottom: `${pct}%` }} />
+        <div className="mx-fader-ticks" aria-hidden>
+          <span />
+          <span />
+          <span />
+          <span />
         </div>
       </div>
 
-      <div className="vol-db mono" title="Level (dBFS approx.)">
-        {muted ? "-∞" : volumeToDbLabel(volume)}
-        <span className="vol-db-unit">dB</span>
-      </div>
+      <span className="mx-fader-label mx-master-label mono">Master</span>
+      <span className="mx-fader-val mx-master-val mono">{pct}%</span>
     </div>
   );
 }
