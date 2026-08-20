@@ -402,14 +402,17 @@ export function ChordSheetModal({
                                     )}
                                     {chordInfo?.resolvesToNext && chordInfo.resolutionLabel && (
                                       <span
-                                        className="lead-chord-res-badge mono"
+                                        className={`lead-chord-motion-arrow mono${
+                                          isSecDom
+                                            ? " arrow-sec-dom"
+                                            : isSubV
+                                            ? " arrow-sub-v"
+                                            : " arrow-dom"
+                                        }`}
                                         title={chordInfo.description}
                                       >
                                         {chordInfo.resolutionLabel}
                                       </span>
-                                    )}
-                                    {c.role && !chordInfo?.secondaryRoman && (
-                                      <span className="lead-chord-role mono">{c.role}</span>
                                     )}
                                     {b.chords.length > 1 && (
                                       <span className="lead-chord-beats mono">

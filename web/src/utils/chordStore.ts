@@ -421,88 +421,58 @@ export function analyzeChordHarmonics(
     targetRoot = keyRoot;
     description = `${chord} [${baseRoman}] (主調プライマリドミナント ➔ ${key} に解決)`;
   }
-  // 2. Secondary Dominant Checks (V/x)
+  // 2. Candidate Secondary Dominants (V/x) - resolved in Pass 2
   else if (!isMinor) {
     // Major Key Secondary Dominants: V/ii (VI), V/iii (VII), V7/IV (I7), V/V (II), V/vi (III)
     if (offset === 9 && isMajDom) {
-      // VI (e.g. A / A7 in C) -> V/ii (target ii = Dm, offset 2)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "ii";
       targetRoot = SEMITONES[(keyIdx + 2) % 12];
       secondaryRoman = isDom7 ? "V7/ii" : "V/ii";
       description = `${chord} [${secondaryRoman}] (セカンダリードミナント ➔ ${targetRoot}m (${targetDegree}) に解決)`;
     } else if (offset === 11 && isMajDom) {
-      // VII (e.g. B / B7 in C) -> V/iii (target iii = Em, offset 4)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "iii";
       targetRoot = SEMITONES[(keyIdx + 4) % 12];
       secondaryRoman = isDom7 ? "V7/iii" : "V/iii";
       description = `${chord} [${secondaryRoman}] (セカンダリードミナント ➔ ${targetRoot}m (${targetDegree}) に解決)`;
     } else if (offset === 0 && isDom7) {
-      // I7 (e.g. C7 in C) -> V7/IV (target IV = F, offset 5)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "IV";
       targetRoot = SEMITONES[(keyIdx + 5) % 12];
       secondaryRoman = "V7/IV";
       description = `${chord} [${secondaryRoman}] (セカンダリードミナント ➔ ${targetRoot} (${targetDegree}) に解決)`;
     } else if (offset === 2 && isMajDom) {
-      // II (e.g. D / D7 in C) -> V/V (target V = G, offset 7)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "V";
       targetRoot = SEMITONES[(keyIdx + 7) % 12];
       secondaryRoman = isDom7 ? "V7/V" : "V/V";
       description = `${chord} [${secondaryRoman}] (セカンダリードミナント / Double Dominant ➔ ${targetRoot} (${targetDegree}) に解決)`;
     } else if (offset === 4 && isMajDom) {
-      // III (e.g. E / E7 in C) -> V/vi (target vi = Am, offset 9)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "vi";
       targetRoot = SEMITONES[(keyIdx + 9) % 12];
       secondaryRoman = isDom7 ? "V7/vi" : "V/vi";
       description = `${chord} [${secondaryRoman}] (セカンダリードミナント ➔ ${targetRoot}m (${targetDegree}) に解決)`;
     }
-    // 3. Tritone Substitution (SubV in Major Key)
+    // 3. Candidate Tritone Substitution (SubV in Major Key)
     else if (isDom7) {
       if (offset === 1) {
-        // ♭II7 (e.g. Db7 in C) -> SubV/I
-        harmonicRole = "sub-v";
-        isDominant = true;
         targetDegree = "I";
         targetRoot = SEMITONES[keyIdx];
         secondaryRoman = "SubV/I";
         description = `${chord} [${secondaryRoman}] (裏コード / 代理ドミナント ➔ ${targetRoot} (${targetDegree}) に半音下降解決)`;
       } else if (offset === 3) {
-        // ♭III7 (e.g. Eb7 in C) -> SubV/ii
-        harmonicRole = "sub-v";
-        isDominant = true;
         targetDegree = "ii";
         targetRoot = SEMITONES[(keyIdx + 2) % 12];
         secondaryRoman = "SubV/ii";
         description = `${chord} [${secondaryRoman}] (裏コード ➔ ${targetRoot}m (${targetDegree}) に半音下降解決)`;
       } else if (offset === 6) {
-        // ♭V7 / ♯IV7 (e.g. Gb7 in C) -> SubV/IV
-        harmonicRole = "sub-v";
-        isDominant = true;
         targetDegree = "IV";
         targetRoot = SEMITONES[(keyIdx + 5) % 12];
         secondaryRoman = "SubV/IV";
         description = `${chord} [${secondaryRoman}] (裏コード ➔ ${targetRoot} (${targetDegree}) に半音下降解決)`;
       } else if (offset === 8) {
-        // ♭VI7 (e.g. Ab7 in C) -> SubV/V
-        harmonicRole = "sub-v";
-        isDominant = true;
         targetDegree = "V";
         targetRoot = SEMITONES[(keyIdx + 7) % 12];
         secondaryRoman = "SubV/V";
         description = `${chord} [${secondaryRoman}] (裏コード ➔ ${targetRoot} (${targetDegree}) に半音下降解決)`;
       } else if (offset === 10) {
-        // ♭VII7 (e.g. Bb7 in C) -> SubV/vi
-        harmonicRole = "sub-v";
-        isDominant = true;
         targetDegree = "vi";
         targetRoot = SEMITONES[(keyIdx + 9) % 12];
         secondaryRoman = "SubV/vi";
@@ -512,41 +482,26 @@ export function analyzeChordHarmonics(
   } else {
     // Minor Key Secondary Dominants: V/III (VII), V/iv (I), V/V (II), V7/VI (III), V/VII (IV)
     if (offset === 10 && isDom7) {
-      // VII7 (e.g. G7 in Am) -> V7/III (target III = C, offset 3)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "III";
       targetRoot = SEMITONES[(keyIdx + 3) % 12];
       secondaryRoman = "V7/III";
       description = `${chord} [${secondaryRoman}] (セカンダリードミナント ➔ ${targetRoot} (${targetDegree}) に解決)`;
     } else if (offset === 0 && isMajDom) {
-      // I (e.g. A / A7 in Am) -> V/iv (target iv = Dm, offset 5)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "iv";
       targetRoot = SEMITONES[(keyIdx + 5) % 12];
       secondaryRoman = isDom7 ? "V7/iv" : "V/iv";
       description = `${chord} [${secondaryRoman}] (セカンダリードミナント ➔ ${targetRoot}m (${targetDegree}) に解決)`;
     } else if (offset === 2 && isMajDom) {
-      // II (e.g. B / B7 in Am) -> V/V (target V = E/Em, offset 7)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "V";
       targetRoot = SEMITONES[(keyIdx + 7) % 12];
       secondaryRoman = isDom7 ? "V7/V" : "V/V";
       description = `${chord} [${secondaryRoman}] (セカンダリードミナント ➔ ${targetRoot} (${targetDegree}) に解決)`;
     } else if (offset === 3 && isDom7) {
-      // III7 (e.g. C7 in Am) -> V7/VI (target VI = F, offset 8)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "VI";
       targetRoot = SEMITONES[(keyIdx + 8) % 12];
       secondaryRoman = "V7/VI";
       description = `${chord} [${secondaryRoman}] (セカンダリードミナント ➔ ${targetRoot} (${targetDegree}) に解決)`;
     } else if (offset === 5 && isMajDom) {
-      // IV (e.g. D / D7 in Am) -> V/VII (target VII = G, offset 10)
-      harmonicRole = "secondary-dominant";
-      isDominant = true;
       targetDegree = "VII";
       targetRoot = SEMITONES[(keyIdx + 10) % 12];
       secondaryRoman = isDom7 ? "V7/VII" : "V/VII";
@@ -555,25 +510,16 @@ export function analyzeChordHarmonics(
     // SubV in Minor Key
     else if (isDom7) {
       if (offset === 1) {
-        // ♭II7 (e.g. Bb7 in Am) -> SubV/i
-        harmonicRole = "sub-v";
-        isDominant = true;
         targetDegree = "i";
         targetRoot = SEMITONES[keyIdx];
         secondaryRoman = "SubV/i";
         description = `${chord} [${secondaryRoman}] (裏コード ➔ ${targetRoot}m (${targetDegree}) に半音下降解決)`;
       } else if (offset === 6) {
-        // ♭V7 (e.g. Eb7 in Am) -> SubV/iv
-        harmonicRole = "sub-v";
-        isDominant = true;
         targetDegree = "iv";
         targetRoot = SEMITONES[(keyIdx + 5) % 12];
         secondaryRoman = "SubV/iv";
         description = `${chord} [${secondaryRoman}] (裏コード ➔ ${targetRoot}m (${targetDegree}) に半音下降解決)`;
       } else if (offset === 8) {
-        // ♭VI7 (e.g. F7 in Am) -> SubV/V
-        harmonicRole = "sub-v";
-        isDominant = true;
         targetDegree = "V";
         targetRoot = SEMITONES[(keyIdx + 7) % 12];
         secondaryRoman = "SubV/V";
@@ -582,7 +528,21 @@ export function analyzeChordHarmonics(
     }
   }
 
-  const roman = secondaryRoman ?? baseRoman;
+  const roman = baseRoman;
+
+  return {
+    isDiatonic,
+    roman,
+    baseRoman,
+    secondaryRoman,
+    harmonicRole,
+    isDominant,
+    targetDegree,
+    targetRoot,
+    resolvesToNext: false,
+    resolutionLabel: null,
+    description,
+  };
 
   return {
     isDiatonic,
@@ -679,33 +639,40 @@ export function analyzeBarChordsWithContext(
             curAnalysis.resolvesToNext = true;
             curAnalysis.resolutionType = "5th-down";
             curAnalysis.resolutionLabel = `➔ ${next.analysis.baseRoman}`;
-            curAnalysis.description = `${cur.chordTransposed} [${curAnalysis.roman}] (プライマリドミナント ➔ ${next.chordTransposed} に完全5度解決)`;
-          } else if (curAnalysis.harmonicRole === "secondary-dominant") {
+            curAnalysis.description = `${cur.chordTransposed} [${curAnalysis.roman}] (主調プライマリドミナント ➔ ${next.chordTransposed} に完全5度解決)`;
+          } else if (curAnalysis.secondaryRoman && !curAnalysis.secondaryRoman.startsWith("SubV")) {
             const targetCanon = curAnalysis.targetRoot ? FLAT_TO_SHARP[curAnalysis.targetRoot] ?? curAnalysis.targetRoot : "";
             if (nextRoot === targetCanon) {
+              curAnalysis.harmonicRole = "secondary-dominant";
+              curAnalysis.isDominant = true;
               curAnalysis.resolvesToNext = true;
               curAnalysis.resolutionType = "5th-down";
               curAnalysis.resolutionLabel = `➔ ${curAnalysis.targetDegree}`;
+              curAnalysis.roman = curAnalysis.secondaryRoman;
               curAnalysis.description = `${cur.chordTransposed} [${curAnalysis.secondaryRoman}] (セカンダリードミナント ➔ ${next.chordTransposed} (${curAnalysis.targetDegree}) に完全5度解決)`;
             } else if (next.analysis.isDominant) {
               // Cycle of Dominants (e.g. E7 -> A7 -> D7 -> G7)
+              curAnalysis.harmonicRole = "secondary-dominant";
+              curAnalysis.isDominant = true;
               curAnalysis.resolvesToNext = true;
               curAnalysis.resolutionType = "cycle";
-              curAnalysis.resolutionLabel = `➔ ${next.chordTransposed}`;
-              curAnalysis.description = `${cur.chordTransposed} [${curAnalysis.secondaryRoman ?? curAnalysis.roman}] (ドミナントモーション連鎖 / Cycle of 5ths ➔ ${next.chordTransposed})`;
+              curAnalysis.resolutionLabel = `➔ ${next.analysis.baseRoman}`;
+              curAnalysis.roman = curAnalysis.secondaryRoman;
+              curAnalysis.description = `${cur.chordTransposed} [${curAnalysis.secondaryRoman}] (ドミナントモーション連鎖 / Cycle of 5ths ➔ ${next.chordTransposed})`;
             }
           }
         }
         // 2. Half-step down resolution for SubV ((cur - next) % 12 === 1)
-        else if (intervalDown === 1) {
-          if (curAnalysis.harmonicRole === "sub-v") {
-            const targetCanon = curAnalysis.targetRoot ? FLAT_TO_SHARP[curAnalysis.targetRoot] ?? curAnalysis.targetRoot : "";
-            if (nextRoot === targetCanon) {
-              curAnalysis.resolvesToNext = true;
-              curAnalysis.resolutionType = "half-step-down";
-              curAnalysis.resolutionLabel = `➔ ${curAnalysis.targetDegree}`;
-              curAnalysis.description = `${cur.chordTransposed} [${curAnalysis.secondaryRoman}] (裏コード / 代理ドミナント ➔ ${next.chordTransposed} (${curAnalysis.targetDegree}) に半音下降解決)`;
-            }
+        else if (intervalDown === 1 && curAnalysis.secondaryRoman && curAnalysis.secondaryRoman.startsWith("SubV")) {
+          const targetCanon = curAnalysis.targetRoot ? FLAT_TO_SHARP[curAnalysis.targetRoot] ?? curAnalysis.targetRoot : "";
+          if (nextRoot === targetCanon) {
+            curAnalysis.harmonicRole = "sub-v";
+            curAnalysis.isDominant = true;
+            curAnalysis.resolvesToNext = true;
+            curAnalysis.resolutionType = "half-step-down";
+            curAnalysis.resolutionLabel = `➔ ${curAnalysis.targetDegree}`;
+            curAnalysis.roman = curAnalysis.secondaryRoman;
+            curAnalysis.description = `${cur.chordTransposed} [${curAnalysis.secondaryRoman}] (裏コード / 代理ドミナント ➔ ${next.chordTransposed} (${curAnalysis.targetDegree}) に半音下降解決)`;
           }
         }
 

@@ -3511,31 +3511,59 @@
   color: #fb7185;
 }
 
-/* Resolution Arrow Badge */
-.lead-chord-res-badge {
-  font-size: 0.54rem;
-  font-weight: 800;
-  padding: 0.04rem 0.22rem;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #38bdf8;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
+/* Resolution Motion Arrow Badge */
+.lead-chord-motion-arrow {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.65rem;
+  font-weight: 900;
+  padding: 0.06rem 0.32rem;
+  border-radius: 4px;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
-.lead-chord-btn.is-sec-dominant .lead-chord-res-badge {
-  color: #f0abfc;
-  background: rgba(217, 70, 239, 0.18);
+.lead-chord-motion-arrow.arrow-sec-dom {
+  color: #fdf4ff;
+  background: linear-gradient(135deg, rgba(217, 70, 239, 0.4), rgba(168, 85, 247, 0.5));
+  border: 1px solid rgba(217, 70, 239, 0.6);
+  box-shadow: 0 0 8px rgba(217, 70, 239, 0.4);
 }
 
-.lead-chord-btn.is-sub-v .lead-chord-res-badge {
-  color: #5eead4;
-  background: rgba(45, 212, 191, 0.18);
+.lead-chord-motion-arrow.arrow-dom {
+  color: #fefce8;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.4), rgba(234, 179, 8, 0.5));
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
 }
 
-.lead-chord-btn.is-dominant .lead-chord-res-badge {
-  color: #fde047;
-  background: rgba(234, 179, 8, 0.18);
+.lead-chord-motion-arrow.arrow-sub-v {
+  color: #f0fdfa;
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.4), rgba(20, 184, 166, 0.5));
+  border: 1px solid rgba(45, 212, 191, 0.6);
+  box-shadow: 0 0 8px rgba(45, 212, 191, 0.4);
+}
+
+/* Directional gradient on resolving dominant button */
+.lead-chord-btn.is-resolving {
+  position: relative;
+  border-right-width: 3px !important;
+}
+
+.lead-chord-btn.is-resolving.is-sec-dominant {
+  border-right-color: #e879f9 !important;
+  background: linear-gradient(90deg, rgba(217, 70, 239, 0.06), rgba(217, 70, 239, 0.18));
+}
+
+.lead-chord-btn.is-resolving.is-dominant {
+  border-right-color: #facc15 !important;
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.06), rgba(245, 158, 11, 0.18));
+}
+
+.lead-chord-btn.is-resolving.is-sub-v {
+  border-right-color: #2dd4bf !important;
+  background: linear-gradient(90deg, rgba(45, 212, 191, 0.06), rgba(45, 212, 191, 0.18));
 }
 
 /* Legend Help Button in Toolbar */
