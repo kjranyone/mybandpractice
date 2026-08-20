@@ -3538,42 +3538,243 @@
   background: rgba(234, 179, 8, 0.18);
 }
 
-/* Legend Chips in Toolbar */
-.chip-diatonic,
-.chip-dominant,
-.chip-secdom,
-.chip-subv,
-.chip-nondiatonic {
-  font-size: 0.68rem;
-  gap: 0.3rem;
+/* Legend Help Button in Toolbar */
+.chord-help-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(94, 234, 212, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(94, 234, 212, 0.35);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chord-help-btn:hover {
+  background: rgba(94, 234, 212, 0.2);
+  border-color: var(--accent);
+  box-shadow: 0 0 8px rgba(94, 234, 212, 0.3);
+}
+
+.chord-help-q {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #0d1117;
+  font-size: 0.65rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+/* Legend Modal */
+.chord-legend-modal-card {
+  max-width: 780px !important;
+  max-height: 85vh;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #111827;
+  color: #f3f4f6;
+}
+
+.chord-legend-modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 0.5rem 0.25rem 1rem;
+}
+
+.legend-modal-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.legend-sec-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #f9fafb;
+  margin: 0;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.legend-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0.75rem;
+}
+
+.legend-card {
+  padding: 0.75rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.legend-card.is-diatonic {
+  border-color: rgba(147, 197, 253, 0.3);
+  background: rgba(147, 197, 253, 0.05);
+}
+
+.legend-card.is-dominant {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.legend-card.is-sec-dominant {
+  border-color: rgba(217, 70, 239, 0.4);
+  background: rgba(217, 70, 239, 0.06);
+}
+
+.legend-card.is-sub-v {
+  border-color: rgba(45, 212, 191, 0.4);
+  background: rgba(45, 212, 191, 0.06);
+}
+
+.legend-card.is-related-two {
+  border-color: rgba(192, 132, 252, 0.35);
+  background: rgba(192, 132, 252, 0.05);
+}
+
+.legend-card.is-nondiatonic {
+  border-color: rgba(251, 113, 133, 0.35);
+  background: rgba(251, 113, 133, 0.05);
+}
+
+.legend-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.legend-card-header strong {
+  font-size: 0.85rem;
+  color: #fff;
+}
+
+.legend-card-badge {
+  margin-left: auto;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+}
+
+.legend-card-desc {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+  margin: 0;
+}
+
+.legend-card-example {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  padding-top: 0.25rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.07);
+}
+
+.legend-card-example code {
+  color: #f1f5f9;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0.1rem 0.25rem;
+  border-radius: 3px;
+  font-family: monospace;
 }
 
 .legend-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
 .legend-dot.dot-diatonic {
   background: #93c5fd;
+  box-shadow: 0 0 6px rgba(147, 197, 253, 0.5);
 }
 
 .legend-dot.dot-dominant {
   background: #fde047;
+  box-shadow: 0 0 6px rgba(253, 224, 71, 0.5);
 }
 
 .legend-dot.dot-secdom {
   background: #e879f9;
+  box-shadow: 0 0 6px rgba(232, 121, 249, 0.5);
 }
 
 .legend-dot.dot-subv {
   background: #2dd4bf;
+  box-shadow: 0 0 6px rgba(45, 212, 191, 0.5);
+}
+
+.legend-dot.dot-reltwo {
+  background: #c084fc;
+  box-shadow: 0 0 6px rgba(192, 132, 252, 0.5);
 }
 
 .legend-dot.dot-nondiatonic {
   background: #fb7185;
+  box-shadow: 0 0 6px rgba(251, 113, 133, 0.5);
+}
+
+.legend-badge-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.legend-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.legend-badge-row .lead-cadence-badge {
+  min-width: 65px;
+  justify-content: center;
+}
+
+.legend-badge-info {
+  font-size: 0.76rem;
+  color: #cbd5e1;
+}
+
+.legend-lead-notation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+}
+
+.legend-lead-notation-grid code {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.82rem;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  margin-right: 0.3rem;
 }
 
 /* Active Highlight */

@@ -193,6 +193,8 @@ export function ChordSheetModal({
     return transposeChord(chordsData.key, pitch);
   }, [chordsData?.key, pitch]);
 
+  const [legendOpen, setLegendOpen] = useState(false);
+
   // 2-Pass Comprehensive Harmonic Sequence Analysis (Secondary Dominants, SubV, Related II, Cadences)
   const harmonicAnalysis = useMemo(() => {
     if (!displayKey || bars.length === 0) {
@@ -205,53 +207,43 @@ export function ChordSheetModal({
   }, [bars, displayKey, pitch]);
 
   return (
-    <Modal
-      title={`🎸 ${song?.title ?? "Chord Sheet"}`}
-      sub={song?.artist}
-      onClose={onClose}
-      className="chord-sheet-modal"
-    >
-      <div className="chord-sheet-container" ref={containerRef}>
-        {/* Toolbar Header */}
-        <div className="chord-sheet-toolbar">
-          <div className="chord-sheet-meta">
-            {chordsData?.key && (
-              <span className="chip chip-key" title="Key">
-                Key: <strong>{displayKey}</strong>
-                {pitch !== 0 && (
-                  <span className="chip-transposed">
-                    ({pitch > 0 ? `+${pitch}` : pitch}st)
-                  </span>
-                )}
-              </span>
-            )}
-            {chordsData?.bpm && (
-              <span className="chip mono" title="Tempo">
-                ♩ {Math.round(chordsData.bpm)} BPM
-              </span>
-            )}
-            <span className="chip mono">4/4 拍子 (4小節/段)</span>
-            <span className="chip mono">{bars.length} 小節</span>
-            {displayKey && (
-              <>
-                <span className="chip chip-diatonic" title="キーの音階に含まれるコード (Ⅰ, ⅱ, ⅲ, Ⅳ, Ⅴ, ⅵ, ⅶ°)">
-                  <span className="legend-dot dot-diatonic" /> ダイアトニック
+    <>
+      <Modal
+        title={`🎸 ${song?.title ?? "Chord Sheet"}`}
+        sub={song?.artist}
+        onClose={onClose}
+        className="chord-sheet-modal"
+      >
+        <div className="chord-sheet-container" ref={containerRef}>
+          {/* Toolbar Header */}
+          <div className="chord-sheet-toolbar">
+            <div className="chord-sheet-meta">
+              {chordsData?.key && (
+                <span className="chip chip-key" title="Key">
+                  Key: <strong>{displayKey}</strong>
+                  {pitch !== 0 && (
+                    <span className="chip-transposed">
+                      ({pitch > 0 ? `+${pitch}` : pitch}st)
+                    </span>
+                  )}
                 </span>
-                <span className="chip chip-dominant" title="主調のドミナント (Ⅴ, Ⅴ7)">
-                  <span className="legend-dot dot-dominant" /> ドミナント (Ⅴ)
+              )}
+              {chordsData?.bpm && (
+                <span className="chip mono" title="Tempo">
+                  ♩ {Math.round(chordsData.bpm)} BPM
                 </span>
-                <span className="chip chip-secdom" title="副ドミナント (Ⅴ/ⅵ, Ⅴ/Ⅴ, Ⅴ/ⅱ, Ⅴ/Ⅳ, Ⅴ/ⅲ など)">
-                  <span className="legend-dot dot-secdom" /> セカンダリードミナント (Ⅴ/x)
-                </span>
-                <span className="chip chip-subv" title="裏コード / 代理ドミナント (SubV/Ⅰ, SubV/ⅵ など)">
-                  <span className="legend-dot dot-subv" /> 裏コード (SubV)
-                </span>
-                <span className="chip chip-nondiatonic" title="キー外の借用コード・モーダルインターチェンジ">
-                  <span className="legend-dot dot-nondiatonic" /> 借用・非ダイアトニック
-                </span>
-              </>
-            )}
-          </div>
+              )}
+              <span className="chip mono">4/4 拍子 (4小節/段)</span>
+              <span className="chip mono">{bars.length} 小節</span>
+              <button
+                type="button"
+                className="chip chip-btn chord-help-btn"
+                onClick={() => setLegendOpen(true)}
+                title="コードの色分け・和声機能・ケーデンスの凡例を開く"
+              >
+                <span className="chord-help-q">?</span> 凡例
+              </button>
+            </div>
 
           <div className="chord-sheet-controls">
             <label className="chord-autoscroll-toggle">
@@ -434,6 +426,166 @@ export function ChordSheetModal({
             })}
           </div>
         )}
+      </div>
+    </Modal>
+
+    {legendOpen && <ChordLegendModal onClose={() => setLegendOpen(false)} />}
+  </>
+  );
+}
+
+/** Rich Help / Theory Legend Modal explaining Harmonic Roles, Colors, Badges and Notations */
+function ChordLegendModal({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal
+      title="🎼 コード譜の凡例と和声機能ガイド"
+      sub="色分け・度数表記・ケーデンスの意味"
+      onClose={onClose}
+      className="chord-legend-modal-card"
+    >
+      <div className="chord-legend-modal-content">
+        <section className="legend-modal-sec">
+          <h4 className="legend-sec-title">🎨 コードの色分け（和声機能）</h4>
+          <div className="legend-card-grid">
+            <div className="legend-card is-diatonic">
+              <div className="legend-card-header">
+                <span className="legend-dot dot-diatonic" />
+                <strong>ダイアトニックコード</strong>
+                <span className="legend-card-badge">Ⅰ, ⅱ, ⅲ, Ⅳ, Ⅴ, ⅵ, ⅶ°</span>
+              </div>
+              <p className="legend-card-desc">
+                キー（調）の音階構成音で作られる基本和音。楽曲の土台となる自然で安定した響きです。
+              </p>
+              <div className="legend-card-example">
+                例: Key C における <code>C (Ⅰ)</code>, <code>Dm (ⅱ)</code>, <code>Em (ⅲ)</code>, <code>F (Ⅳ)</code>, <code>Am (ⅵ)</code>
+              </div>
+            </div>
+
+            <div className="legend-card is-dominant">
+              <div className="legend-card-header">
+                <span className="legend-dot dot-dominant" />
+                <strong>プライマリドミナント (Ⅴ)</strong>
+                <span className="legend-card-badge">Ⅴ, Ⅴ7</span>
+              </div>
+              <p className="legend-card-desc">
+                主調の第5度和音。トニック（Ⅰ）へ強く引き寄せられる解決感（完全5度下降）を持ちます。
+              </p>
+              <div className="legend-card-example">
+                例: Key C における <code>G7 (Ⅴ7) ➔ C (Ⅰ)</code>
+              </div>
+            </div>
+
+            <div className="legend-card is-sec-dominant">
+              <div className="legend-card-header">
+                <span className="legend-dot dot-secdom" />
+                <strong>セカンダリードミナント (Ⅴ/x)</strong>
+                <span className="legend-card-badge">Ⅴ/ⅵ, Ⅴ/Ⅴ, Ⅴ/ⅱ, Ⅴ/Ⅳ, Ⅴ/ⅲ</span>
+              </div>
+              <p className="legend-card-desc">
+                ダイアトニックコード（ⅱ, ⅲ, Ⅳ, Ⅴ, ⅵなど）に一時的に向かう副ドミナント。分数度数と解決先（<code>➔ ⅵ</code> 等）を表示します。
+              </p>
+              <div className="legend-card-example">
+                例: Key C における <code>E7 (Ⅴ7/vi) ➔ Am (ⅵ)</code>, <code>A7 (Ⅴ7/ii) ➔ Dm (ⅱ)</code>, <code>D7 (Ⅴ7/V) ➔ G (Ⅴ)</code>
+              </div>
+            </div>
+
+            <div className="legend-card is-sub-v">
+              <div className="legend-card-header">
+                <span className="legend-dot dot-subv" />
+                <strong>裏コード / 代理ドミナント (SubV)</strong>
+                <span className="legend-card-badge">SubV/Ⅰ, SubV/ⅵ, SubV/ⅱ</span>
+              </div>
+              <p className="legend-card-desc">
+                解決先コードの半音上から下降解決するドミナント7th。同じトライトーン（3全音）を共有する代理コードです。
+              </p>
+              <div className="legend-card-example">
+                例: Key C における <code>D♭7 (SubV/Ⅰ) ➔ C (Ⅰ)</code>, <code>B♭7 (SubV/ⅵ) ➔ Am (ⅵ)</code>
+              </div>
+            </div>
+
+            <div className="legend-card is-related-two">
+              <div className="legend-card-header">
+                <span className="legend-dot dot-reltwo" />
+                <strong>関連II (Related II: ⅱ/x)</strong>
+                <span className="legend-card-badge">ⅱ/x, ⅱø/x</span>
+              </div>
+              <p className="legend-card-desc">
+                セカンダリードミナントに先行してツーファイブを形成する「II」和音です。
+              </p>
+              <div className="legend-card-example">
+                例: Key C における <code>Bm7(♭5) (iiø/vi) ➔ E7 (V/vi) ➔ Am (vi)</code>
+              </div>
+            </div>
+
+            <div className="legend-card is-nondiatonic">
+              <div className="legend-card-header">
+                <span className="legend-dot dot-nondiatonic" />
+                <strong>非ダイアトニック / 借用和音</strong>
+                <span className="legend-card-badge">Non-Diatonic</span>
+              </div>
+              <p className="legend-card-desc">
+                同主短調や他の旋法（モード）から一時的に借用されたコード（モーダルインターチェンジ、サブドミナントマイナー等）です。
+              </p>
+              <div className="legend-card-example">
+                例: Key C における <code>Fm (ⅳm)</code>, <code>A♭ (♭Ⅵ)</code>, <code>B♭ (♭Ⅶ)</code>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="legend-modal-sec">
+          <h4 className="legend-sec-title">🏷️ 小節のケーデンス（終止・進行）バッジ</h4>
+          <div className="legend-badge-table">
+            <div className="legend-badge-row">
+              <span className="lead-cadence-badge cadence-251">Ⅱ-Ⅴ-Ⅰ</span>
+              <div className="legend-badge-info">
+                <strong>Ⅱ-Ⅴ-Ⅰ ケーデンス</strong>: ポップス・ジャズにおける王道の主和音終止進行
+              </div>
+            </div>
+            <div className="legend-badge-row">
+              <span className="lead-cadence-badge cadence-51">Ⅴ➔Ⅰ</span>
+              <div className="legend-badge-info">
+                <strong>ドミナントモーション</strong>: Ⅴ(7) から主和音 Ⅰ への完全5度下降解決
+              </div>
+            </div>
+            <div className="legend-badge-row">
+              <span className="lead-cadence-badge cadence-sec-51">Ⅴ/ⅵ➔ⅵ</span>
+              <div className="legend-badge-info">
+                <strong>セカンダリードミナント解決</strong>: 副調の主音（ⅵやⅤなど）への強い推進力
+              </div>
+            </div>
+            <div className="legend-badge-row">
+              <span className="lead-cadence-badge cadence-sec-251">Ⅱ-Ⅴ/ⅵ</span>
+              <div className="legend-badge-info">
+                <strong>セカンダリー・ツーファイブ</strong>: 目的コードへ向かう一時的な Ⅱ-Ⅴ 進行
+              </div>
+            </div>
+            <div className="legend-badge-row">
+              <span className="lead-cadence-badge cadence-sub-v">SubV➔Ⅰ</span>
+              <div className="legend-badge-info">
+                <strong>裏コード解決</strong>: 半音上のドミナントからベースが半音下降して解決
+              </div>
+            </div>
+            <div className="legend-badge-row">
+              <span className="lead-cadence-badge cadence-cycle">Ⅴ➔Ⅴ</span>
+              <div className="legend-badge-info">
+                <strong>ドミナント連鎖（Cycle of 5ths）</strong>: ドミナントコードが5度下降で連続する進行
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="legend-modal-sec">
+          <h4 className="legend-sec-title">📐 リードシートコード表記法</h4>
+          <div className="legend-lead-notation-grid">
+            <div><code>Δ7</code> = Major 7th (CMaj7)</div>
+            <div><code>-7</code> = Minor 7th (Dm7)</div>
+            <div><code>ø7</code> = Half-Diminished (Bm7♭5)</div>
+            <div><code>°</code> = Diminished (Bdim)</div>
+            <div><code>+</code> = Augmented (Caug)</div>
+            <div><code>-Δ7</code> = Minor Major 7th (CmMaj7)</div>
+          </div>
+        </section>
       </div>
     </Modal>
   );
