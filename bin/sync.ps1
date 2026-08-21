@@ -149,10 +149,19 @@ function Sync-Songs {
     if ($LASTEXITCODE -ne 0) { Write-Host "chunk generation failed (continuing without)" -ForegroundColor Yellow }
   }
 
-  # Remove existing pushed contents so adb push doesn't fail on fchown/permissions
   $DeviceParent = "/storage/emulated/0/Android/data/$Pkg/files"
   $DeviceSetlistsDir = "/storage/emulated/0/Android/data/$Pkg/files/setlists"
-  & $adbExe -s $target shell "mkdir -p '$DeviceParent'"
+
+  # Android 14+ exposes Android/data as a raw passthrough mount (f2fs):
+  #   - adb push fails there ("remote fchown() failed / secure_mkdirs"):
+  #     Operation not permitted) and deletes the partially-copied file
+  #   - files created by the shell (uid 2000) cannot be read by the app
+  # So: push everything to /data/local/tmp first, then cp as shell into the
+  # app dir and open permissions (a+rwX) so the app uid can read/write.
+  $TmpStage = "/data/local/tmp/mbp-sync"
+  $TmpSongsDir = "$TmpStage/songs"
+  & $adbExe -s $target shell "rm -rf '$TmpStage'; mkdir -p '$TmpStage' '$DeviceParent'"
+  if ($LASTEXITCODE -ne 0) { throw "failed to prepare staging dir on device" }
 
   # Preserve on-device practice data (markers, stanza tags) created on the
   # tablet: pull every practice.json first and re-push it after the wipe.
@@ -189,8 +198,8 @@ function Sync-Songs {
         # push only the chunks/ subdir of stems/
         $chunkDir = Join-Path $item.FullName "chunks"
         if (Test-Path $chunkDir) {
-          & $adbExe -s $target shell "mkdir -p '$DeviceSongsDir/$($songDir.Name)/stems'"
-          & $adbExe -s $target push "$chunkDir" "$DeviceSongsDir/$($songDir.Name)/stems/" | Out-Null
+          & $adbExe -s $target shell "mkdir -p '$TmpSongsDir/$($songDir.Name)/stems'"
+          & $adbExe -s $target push "$chunkDir" "$TmpSongsDir/$($songDir.Name)/stems/" | Out-Null
         }
         $skip = $true
       }
@@ -201,7 +210,8 @@ function Sync-Songs {
         $skip = $true
       }
       if (-not $skip) {
-        & $adbExe -s $target push "$($item.FullName)" "$DeviceSongsDir/$($songDir.Name)/" | Out-Null
+        & $adbExe -s $target push "$($item.FullName)" "$TmpSongsDir/$($songDir.Name)/" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "adb push failed (staging): $($item.FullName)" }
       }
     }
   }
@@ -210,7 +220,8 @@ function Sync-Songs {
   $restored = 0
   foreach ($bak in (Get-ChildItem $PracticeBackup -Filter *.json -ErrorAction SilentlyContinue)) {
     $slug = $bak.BaseName
-    & $adbExe -s $target push "$($bak.FullName)" "$DeviceSongsDir/$slug/practice.json" | Out-Null
+    & $adbExe -s $target push "$($bak.FullName)" "$TmpSongsDir/$slug/practice.json" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "adb push failed (practice.json): $slug" }
     $restored++
   }
   if ($restored -gt 0) {
@@ -225,7 +236,23 @@ function Sync-Songs {
   $Setlists = Join-Path $Root "setlists"
   if (Test-Path $Setlists) {
     Write-Host "==> pushing setlists/ -> $DeviceSetlistsDir ..." -ForegroundColor Cyan
-    & $adbExe -s $target push $Setlists $DeviceParent | Out-Null
+    & $adbExe -s $target push $Setlists "$TmpStage/" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "adb push failed (staging setlists/)" }
+  }
+
+  # Move staged content into the app dir and make it app-accessible
+  Write-Host "==> moving staged files into $DeviceParent ..." -ForegroundColor Cyan
+  $srcs = "'$TmpSongsDir'"
+  if (Test-Path $Setlists) { $srcs += " '$TmpStage/setlists'" }
+  & $adbExe -s $target shell "cp -r $srcs '$DeviceParent' && chmod -R a+rwX '$DeviceParent' && rm -rf '$TmpStage'"
+  if ($LASTEXITCODE -ne 0) { throw "device-side copy/chmod failed" }
+
+  # Sanity check: every song slug must exist on the device
+  $devList = (& $adbExe -s $target shell "ls '$DeviceSongsDir'" | Out-String) -split "`n" |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ }
+  $missing = @(Get-ChildItem $Songs -Directory | Where-Object { $devList -notcontains $_.Name })
+  if ($missing.Count -gt 0) {
+    throw "songs missing on device after sync: $($missing.Name -join ', ')"
   }
 
   Write-Host "==> songs synced (chunked songs: whole stems skipped on device)" -ForegroundColor Green
