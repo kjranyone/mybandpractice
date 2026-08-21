@@ -20,7 +20,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -131,21 +131,23 @@ def load_model(model_type: str, config_path: Path, ckpt_path: Path, device: str)
     return model, config
 
 
-def encode_mp3(wav_path: Path, mp3_path: Path, bitrate: str) -> None:
+def encode_lossy(wav_path: Path, out_path: Path, codec: str, bitrate: str) -> None:
+    """Encode a temp wav to mp3 or ogg/opus via ffmpeg."""
+    encoder = {"mp3": ["-c:a", "libmp3lame"], "ogg": ["-c:a", "libopus", "-vbr", "on"]}[codec]
     res = subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-nostats", "-y",
-            "-i", str(wav_path),
-            "-c:a", "libmp3lame", "-b:a", bitrate, "-ar", "44100",
-            str(mp3_path),
+            "-i", str(wav_path), *encoder, "-b:a", bitrate, "-ar", "44100",
+            str(out_path),
         ],
         capture_output=True,
         encoding="utf-8",
         errors="replace",
         env=UTF8_ENV,
+        check=False,
     )
     if res.returncode != 0:
-        raise RuntimeError("ffmpeg mp3 encode failed:\n" + res.stderr)
+        raise RuntimeError(f"ffmpeg {codec} encode failed:\n" + res.stderr)
 
 
 def separate_song(
@@ -156,6 +158,7 @@ def separate_song(
     bitrate: str,
     force: bool = False,
     batch_size: int | None = None,
+    output_format: str = "ogg",
 ) -> bool:
     import gc
 
@@ -172,25 +175,31 @@ def separate_song(
         return False
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
-    audio_file = song_dir / f"{song_dir.name}.mp3"
-    if not audio_file.exists():
-        cand = song_dir / meta.get("audio", {}).get("file", "")
-        if cand and cand.exists() and cand.suffix == ".mp3":
+    audio_file = None
+    for ext in (".flac", ".mp3", ".wav", ".m4a"):
+        cand = song_dir / f"{song_dir.name}{ext}"
+        if cand.exists():
             audio_file = cand
+            break
+    if not audio_file:
+        meta_audio = song_dir / meta.get("audio", {}).get("file", "")
+        if meta_audio.exists():
+            audio_file = meta_audio
         else:
             print(f"  [skip] {song_dir.name}: audio file not found")
             return False
 
     stems_dir = song_dir / "stems"
     instruments = ["vocals", "drums", "bass", "other"]
-    if stems_dir.exists() and all(
-        (stems_dir / f"{i}.mp3").exists() for i in instruments
-    ):
-        if not force:
-            print(f"  [skip] {song_dir.name}: stems exist (--force to redo)")
-            return False
+    ext = f".{output_format}"
+    stems_exist = stems_dir.exists() and all(
+        (stems_dir / f"{i}{ext}").exists() for i in instruments
+    )
+    if stems_exist and not force:
+        print(f"  [skip] {song_dir.name}: stems exist (--force to redo)")
+        return False
 
-    print(f"  [separating] {song_dir.name}")
+    print(f"  [separating] {song_dir.name} -> {output_format.upper()}")
     t_start = time.time()
 
     # --- run each model, keep per-stem waveforms in memory ---
@@ -292,11 +301,17 @@ def separate_song(
         peak = float(np.abs(est).max())
         if peak > 0.999:  # prevent clipping on encode
             est = est / peak * 0.999
-        tmp_wav = stems_dir / f"{instr}.wav"
-        sf.write(str(tmp_wav), est.T, sample_rate, subtype="PCM_16")
-        encode_mp3(tmp_wav, stems_dir / f"{instr}.mp3", bitrate)
-        tmp_wav.unlink()
-        files[instr] = f"stems/{instr}.mp3"
+
+        if output_format == "flac":
+            out_file = stems_dir / f"{instr}.flac"
+            sf.write(str(out_file), est.T, sample_rate, format="FLAC", subtype="PCM_16")
+            files[instr] = f"stems/{instr}.flac"
+        else:
+            tmp_wav = stems_dir / f"{instr}.wav"
+            sf.write(str(tmp_wav), est.T, sample_rate, subtype="PCM_16")
+            encode_lossy(tmp_wav, stems_dir / f"{instr}.{output_format}", output_format, bitrate)
+            tmp_wav.unlink()
+            files[instr] = f"stems/{instr}.{output_format}"
 
     meta["stems"] = {
         "models": model_reports,
@@ -306,15 +321,16 @@ def separate_song(
             else None
         ),
         "device": device,
-        "bitrate": bitrate,
-        "separated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "format": output_format,
+        "bitrate": bitrate if output_format != "flac" else None,
+        "separated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "elapsed_seconds": round(time.time() - t_start, 1),
         "files": files,
     }
     meta_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"      wrote {len(files)} stems -> {stems_dir.relative_to(ROOT)}")
+    print(f"      wrote {len(files)} stems ({output_format}) -> {stems_dir.relative_to(ROOT)}")
     return True
 
 
@@ -323,6 +339,13 @@ def main() -> None:
     ap.add_argument("slug", nargs="?", help="song slug under songs/")
     ap.add_argument("--all", action="store_true", help="process all songs")
     ap.add_argument("--force", action="store_true", help="redo existing stems")
+    ap.add_argument(
+        "--format",
+        choices=["flac", "ogg", "mp3"],
+        default="ogg",
+        help="output format for separated stems (default: ogg/opus lossy — "
+        "compact archive; chunks are transcoded independently anyway)",
+    )
     ap.add_argument(
         "--single",
         metavar="NAME",
@@ -341,7 +364,7 @@ def main() -> None:
         "opt-in) | cpu (default: auto)",
     )
     ap.add_argument("--batch-size", type=int, default=None, help="inference batch size (default: 1 on xpu, 4 otherwise)")
-    ap.add_argument("--bitrate", default="192k", help="mp3 bitrate (default 192k)")
+    ap.add_argument("--bitrate", default="192k", help="bitrate for lossy stem formats (default 192k)")
     args = ap.parse_args()
 
     if not MSST_DIR.exists():
@@ -387,12 +410,12 @@ def main() -> None:
         try:
             if separate_song(
                 d, models, ensemble_type, device, args.bitrate, args.force,
-                args.batch_size,
+                args.batch_size, output_format=args.format,
             ):
                 ok += 1
             else:
                 skip += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — isolate per-song failures in batch runs
             fail += 1
             print(f"  [error] {d.name}: {type(e).__name__}: {e}")
             if device == "xpu":

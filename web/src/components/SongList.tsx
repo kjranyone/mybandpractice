@@ -7,6 +7,7 @@ type Props = {
   displaySongs: SongSummary[];
   currentSlug: string | null;
   playing: boolean;
+  buffering?: boolean;
   query: string;
   onQueryChange: (q: string) => void;
   onSelect: (song: SongSummary) => void;
@@ -22,6 +23,7 @@ export function SongList({
   displaySongs,
   currentSlug,
   playing,
+  buffering,
   query,
   onQueryChange,
   onSelect,
@@ -32,8 +34,17 @@ export function SongList({
   mobileOpen,
   onManageSongs,
 }: Props) {
+  const [pendingSlug, setPendingSlug] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const activeItemRef = useRef<HTMLLIElement | null>(null);
+
+  useEffect(() => {
+    if (!buffering) {
+      setPendingSlug(null);
+    }
+  }, [buffering]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -43,6 +54,45 @@ export function SongList({
     document.addEventListener("pointerdown", onDocDown);
     return () => document.removeEventListener("pointerdown", onDocDown);
   }, [menuOpen]);
+
+  // Auto-scroll to active song if out of view and sidebar is visible
+  useEffect(() => {
+    if (!currentSlug) return;
+
+    const isSidebarVisible = () => {
+      if (typeof window === "undefined") return false;
+      const isMobile = window.innerWidth <= 820;
+      return !isMobile || mobileOpen;
+    };
+
+    if (!isSidebarVisible()) return;
+
+    const timer = setTimeout(() => {
+      const container = listRef.current;
+      const item = activeItemRef.current;
+      if (!container || !item) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const itemRect = item.getBoundingClientRect();
+
+      const isAbove = itemRect.top < containerRect.top;
+      const isBelow = itemRect.bottom > containerRect.bottom;
+
+      if (isAbove) {
+        container.scrollTo({
+          top: container.scrollTop + (itemRect.top - containerRect.top),
+          behavior: "smooth",
+        });
+      } else if (isBelow) {
+        container.scrollTo({
+          top: container.scrollTop + (itemRect.bottom - containerRect.bottom),
+          behavior: "smooth",
+        });
+      }
+    }, 50);
+
+    return () => clearTimeout(timer);
+  }, [currentSlug, mobileOpen, displaySongs]);
 
   return (
     <aside className={`sidebar${mobileOpen ? " is-open" : ""}`}>
@@ -127,18 +177,29 @@ export function SongList({
         </label>
       </div>
 
-      <ul className="song-list">
+      <ul className="song-list" ref={listRef}>
         {displaySongs.map((song, i) => {
-          const active = song.slug === currentSlug;
+          const isPending = song.slug === pendingSlug;
+          const active = song.slug === (pendingSlug ?? currentSlug);
+          const isRowBuffering = (active && buffering) || isPending;
           return (
-            <li key={song.slug} className="song-row-li">
+            <li
+              key={song.slug}
+              className="song-row-li"
+              ref={active ? activeItemRef : undefined}
+            >
               <button
                 type="button"
                 className={`song-row${active ? " is-active" : ""}`}
-                onClick={() => onSelect(song)}
+                onClick={() => {
+                  setPendingSlug(song.slug);
+                  onSelect(song);
+                }}
               >
                 <span className="song-index">
-                  {active && playing ? (
+                  {isRowBuffering ? (
+                    <span className="song-loading-spinner" aria-label="Buffering" />
+                  ) : active && playing ? (
                     <span className="eq" aria-label="Playing">
                       <i />
                       <i />

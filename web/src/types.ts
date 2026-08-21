@@ -6,8 +6,18 @@ export type SongSummary = {
   audioUrl: string | null;
   /** available separated stems, e.g. ["vocals","drums","bass","other"] */
   stems?: string[];
-  /** base URL for stem files; `${stemBaseUrl}${stem}.mp3` resolves audio */
+  /** base URL for stem files; `${stemBaseUrl}${stem}.flac` / `.mp3` resolves audio */
   stemBaseUrl?: string;
+  /** Explicit map from stem name to resolved audio URL (supports .flac, .mp3, .wav) */
+  stemUrls?: Record<string, string>;
+  /** Pre-split sample-aligned stem chunks for instant playback (bin/make-stem-chunks.py) */
+  chunks?: {
+    chunkSeconds: number;
+    /** chunk file extension ("flac" | "opus" | "ogg") */
+    ext?: string;
+    /** stem name -> chunk count and URL base; chunk i = `${urlBase}/${i}.${ext}` */
+    stems: Record<string, { count: number; urlBase: string }>;
+  };
   hasLyrics: boolean;
   sourceUrl?: string;
   lyricist?: string;

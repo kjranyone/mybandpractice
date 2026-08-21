@@ -14,7 +14,8 @@
 param(
   [string]$Serial = "",
   [switch]$AppOnly,
-  [switch]$SongsOnly
+  [switch]$SongsOnly,
+  [switch]$Both
 )
 
 $ErrorActionPreference = "Stop"
@@ -138,34 +139,59 @@ function Install-App {
 
 function Sync-Songs {
   if (-not (Test-Path $Songs)) { throw "songs dir not found: $Songs" }
-  Write-Host "==> pushing songs/ -> $DeviceSongsDir ..." -ForegroundColor Cyan
-  
-  # Remove existing pushed contents so adb push doesn't fail on fchown/permissions
-  & $adbExe -s $target shell "rm -rf '$DeviceSongsDir' '$DeviceSetlistsDir'"
-  & $adbExe -s $target shell "mkdir -p $DeviceSongsDir"
-  
-  Get-ChildItem -Path $Songs -Recurse -Directory | ForEach-Object {
-    $rel = $_.FullName.Substring($Songs.Length).Replace('\', '/')
-    & $adbExe -s $target shell "mkdir -p '$DeviceSongsDir$rel'"
+
+  # Ensure sample-aligned stem chunks exist (instant playback on device).
+  # Fast no-op for songs whose stems/chunks/chunks.json is already present.
+  Write-Host "==> ensuring stem chunks (bin/make-stem-chunks.py) ..." -ForegroundColor Cyan
+  $chunker = Join-Path $Root "bin/make-stem-chunks.py"
+  if (Test-Path $chunker) {
+    python $chunker
+    if ($LASTEXITCODE -ne 0) { Write-Host "chunk generation failed (continuing without)" -ForegroundColor Yellow }
   }
-  & $adbExe -s $target push "$Songs/." $DeviceSongsDir
-  if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
+
+  # Remove existing pushed contents so adb push doesn't fail on fchown/permissions
+  $DeviceParent = "/storage/emulated/0/Android/data/$Pkg/files"
+  $DeviceSetlistsDir = "/storage/emulated/0/Android/data/$Pkg/files/setlists"
+  & $adbExe -s $target shell "mkdir -p '$DeviceParent'"
+  & $adbExe -s $target shell "rm -rf '$DeviceSongsDir' '$DeviceSetlistsDir'"
+
+  # Push per song, skipping whole-file stems when chunks exist: chunks
+  # supersede them for playback (~17MB vs ~140MB per song with FLAC stems).
+  # Songs without chunks keep their whole stems (full-decode fallback).
+  $WholeStemExts = @(".flac", ".mp3", ".wav", ".ogg", ".opus", ".m4a")
+  foreach ($songDir in (Get-ChildItem $Songs -Directory)) {
+    $hasChunks = Test-Path (Join-Path $songDir "stems/chunks/chunks.json")
+    $items = Get-ChildItem $songDir
+    foreach ($item in $items) {
+      $skip = $false
+      if ($hasChunks -and $item.Name -eq "stems" -and $item.PSIsContainer) {
+        # push only the chunks/ subdir of stems/
+        $chunkDir = Join-Path $item.FullName "chunks"
+        if (Test-Path $chunkDir) {
+          & $adbExe -s $target shell "mkdir -p '$DeviceSongsDir/$($songDir.Name)/stems'"
+          & $adbExe -s $target push "$chunkDir" "$DeviceSongsDir/$($songDir.Name)/stems/" | Out-Null
+        }
+        $skip = $true
+      }
+      elseif ($hasChunks -and -not $item.PSIsContainer -and
+        $WholeStemExts -contains $item.Extension.ToLowerInvariant() -and
+        $item.Name -ne "$($songDir.Name)$($item.Extension)") {
+        # whole-file stem at song root (uncommon) — also superseded
+        $skip = $true
+      }
+      if (-not $skip) {
+        & $adbExe -s $target push "$($item.FullName)" "$DeviceSongsDir/$($songDir.Name)/" | Out-Null
+      }
+    }
+  }
 
   $Setlists = Join-Path $Root "setlists"
-  $DeviceSetlistsDir = "/storage/emulated/0/Android/data/$Pkg/files/setlists"
-  Write-Host "==> pushing setlists/ -> $DeviceSetlistsDir ..." -ForegroundColor Cyan
-  & $adbExe -s $target shell "mkdir -p $DeviceSetlistsDir"
   if (Test-Path $Setlists) {
-    Get-ChildItem -Path $Setlists -Recurse -Directory | ForEach-Object {
-      $rel = $_.FullName.Substring($Setlists.Length).Replace('\', '/')
-      & $adbExe -s $target shell "mkdir -p '$DeviceSetlistsDir$rel'"
-    }
-    & $adbExe -s $target push "$Setlists/." $DeviceSetlistsDir
-    if ($LASTEXITCODE -ne 0) { throw "adb push failed" }
+    Write-Host "==> pushing setlists/ -> $DeviceSetlistsDir ..." -ForegroundColor Cyan
+    & $adbExe -s $target push $Setlists $DeviceParent | Out-Null
   }
 
-  Write-Host "==> setting permissions on $DeviceSongsDir ..." -ForegroundColor Cyan
-  & $adbExe -s $target shell "chmod -R 777 '$DeviceSongsDir' '$DeviceSetlistsDir' 2>/dev/null || true"
+  Write-Host "==> songs synced (chunked songs: whole stems skipped on device)" -ForegroundColor Green
 }
 
 function Select-Mode {
@@ -186,7 +212,9 @@ function Select-Mode {
   }
 }
 
-if ($AppOnly) {
+if ($Both) {
+  $mode = @{ App = $true;  Songs = $true }
+} elseif ($AppOnly) {
   $mode = @{ App = $true;  Songs = $false }
 } elseif ($SongsOnly) {
   $mode = @{ App = $false; Songs = $true }

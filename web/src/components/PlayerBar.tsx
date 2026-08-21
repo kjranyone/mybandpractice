@@ -28,6 +28,7 @@ type Props = {
   loop: LoopRegion | null;
   loopEnabled: boolean;
   buffered: number;
+  buffering?: boolean;
   playbackMode: PlaybackMode;
   stemLevels: Record<string, number>;
   onStemLevel: (name: string, level: number) => void;
@@ -72,6 +73,7 @@ export function PlayerBar({
   loop,
   loopEnabled,
   buffered,
+  buffering,
   playbackMode,
   stemLevels,
   onStemLevel,
@@ -124,6 +126,7 @@ export function PlayerBar({
         currentTime={currentTime}
         duration={duration}
         buffered={buffered}
+        buffering={buffering}
         loop={loop}
         loopEnabled={loopEnabled}
         markers={markers}
@@ -184,12 +187,16 @@ export function PlayerBar({
           </button>
           <button
             type="button"
-            className="play-btn"
+            className={`play-btn${buffering ? " is-buffering" : ""}`}
             onClick={onToggle}
             disabled={disabled}
-            aria-label={playing ? "Pause" : "Play"}
+            aria-label={buffering ? "Buffering" : playing ? "Pause" : "Play"}
           >
-            <TransportIcon kind={playing ? "pause" : "play"} />
+            {buffering ? (
+              <span className="play-btn-spinner" />
+            ) : (
+              <TransportIcon kind={playing ? "pause" : "play"} />
+            )}
           </button>
           <button
             type="button"

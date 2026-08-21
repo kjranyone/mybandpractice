@@ -30,7 +30,14 @@ export type SongSummary = {
   durationSeconds: number | null;
   audioUrl: string | null;
   stems?: string[];
+  stemUrls?: Record<string, string>;
   stemBaseUrl?: string;
+  /** Pre-split sample-aligned stem chunks for instant playback */
+  chunks?: {
+    chunkSeconds: number;
+    ext?: string;
+    stems: Record<string, { count: number; urlBase: string }>;
+  };
   hasLyrics: boolean;
   sourceUrl?: string;
   lyricist?: string;
@@ -61,10 +68,15 @@ function listSongs(songsDir: string): SongSummary[] {
     }
 
     const files = fs.readdirSync(dir);
-    // Prefer convention: {slug}.mp3, then any .mp3, then meta.audio.file
-    const preferred = `${slug}.mp3`;
-    const mp3 =
-      files.find((f) => f === preferred) ??
+    // Prefer convention: {slug}.ogg, {slug}.opus, {slug}.flac, {slug}.mp3, then meta.audio.file
+    const mainAudio =
+      files.find((f) => f === `${slug}.ogg`) ??
+      files.find((f) => f === `${slug}.opus`) ??
+      files.find((f) => f === `${slug}.flac`) ??
+      files.find((f) => f === `${slug}.mp3`) ??
+      files.find((f) => f.toLowerCase().endsWith(".ogg")) ??
+      files.find((f) => f.toLowerCase().endsWith(".opus")) ??
+      files.find((f) => f.toLowerCase().endsWith(".flac")) ??
       files.find((f) => f.toLowerCase().endsWith(".mp3")) ??
       (meta.audio?.file && files.includes(meta.audio.file)
         ? meta.audio.file
@@ -73,22 +85,84 @@ function listSongs(songsDir: string): SongSummary[] {
     const duration =
       meta.audio?.output_duration_seconds ?? meta.yt_duration_seconds ?? null;
 
-    // Separated stems (bin/separate-stems.py) live in stems/<stem>.mp3
+    // Separated stems live in stems/<stem>.ogg, .flac or .mp3
     let stems: string[] | undefined;
+    let stemUrls: Record<string, string> | undefined;
     const stemsDir = path.join(dir, "stems");
     if (fs.existsSync(stemsDir)) {
-      const found = fs
-        .readdirSync(stemsDir)
-        .filter(
-          (f) =>
-            f.toLowerCase().endsWith(".mp3") &&
-            !["mix", "mixdown", "original"].includes(
-              f.slice(0, -".mp3".length).toLowerCase(),
-            ),
-        )
-        .map((f) => f.slice(0, -".mp3".length))
-        .sort();
-      if (found.length > 0) stems = found;
+      const stemFiles = fs.readdirSync(stemsDir);
+      const stemsMap = new Map<string, string>();
+      for (const fname of stemFiles) {
+        const extMatch = fname.match(/\.(ogg|opus|flac|mp3|wav|m4a)$/i);
+        if (!extMatch) continue;
+        const stemName = fname.slice(0, -extMatch[0].length);
+        if (["mix", "mixdown", "original"].includes(stemName.toLowerCase())) continue;
+        const lower = fname.toLowerCase();
+        const existing = stemsMap.get(stemName);
+        if (
+          !existing ||
+          lower.endsWith(".ogg") ||
+          lower.endsWith(".opus") ||
+          (!existing.toLowerCase().endsWith(".ogg") && !existing.toLowerCase().endsWith(".opus") && lower.endsWith(".flac"))
+        ) {
+          stemsMap.set(stemName, fname);
+        }
+      }
+
+      if (stemsMap.size > 0) {
+        stems = Array.from(stemsMap.keys()).sort();
+        stemUrls = {};
+        for (const [stemName, fname] of stemsMap.entries()) {
+          stemUrls[stemName] = `/songs/${encodeURIComponent(slug)}/stems/${encodeURIComponent(fname)}`;
+        }
+      }
+    }
+
+    // Pre-split sample-aligned chunks (bin/make-stem-chunks.py): served the
+    // same way as on the device — instant playback decodes only the chunk at
+    // the playhead. Whole-file stems above stay as the fallback path.
+    let chunks: SongSummary["chunks"];
+    if (stems && stems.length > 0) {
+      const manifestPath = path.join(stemsDir, "chunks", "chunks.json");
+      if (fs.existsSync(manifestPath)) {
+        try {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
+            chunkSeconds?: number;
+            ext?: string;
+            stems?: Record<string, { count?: number }>;
+          };
+          const ext =
+            typeof manifest.ext === "string" &&
+            ["flac", "opus", "ogg"].includes(manifest.ext)
+              ? manifest.ext
+              : "flac";
+          if (
+            typeof manifest.chunkSeconds === "number" &&
+            manifest.chunkSeconds >= 5 &&
+            manifest.chunkSeconds <= 120 &&
+            manifest.stems
+          ) {
+            const chunkStems: Record<string, { count: number; urlBase: string }> = {};
+            for (const [stemName, info] of Object.entries(manifest.stems)) {
+              if (
+                stems.includes(stemName) &&
+                typeof info.count === "number" &&
+                info.count > 0
+              ) {
+                chunkStems[stemName] = {
+                  count: info.count,
+                  urlBase: `/songs/${encodeURIComponent(slug)}/stems/chunks/${encodeURIComponent(stemName)}`,
+                };
+              }
+            }
+            if (Object.keys(chunkStems).length === stems.length) {
+              chunks = { chunkSeconds: manifest.chunkSeconds, ext, stems: chunkStems };
+            }
+          }
+        } catch {
+          /* malformed chunks manifest — fall back to whole-file stems */
+        }
+      }
     }
 
     songs.push({
@@ -96,10 +170,12 @@ function listSongs(songsDir: string): SongSummary[] {
       title: meta.title || slug,
       artist: meta.artist || "Unknown",
       durationSeconds: duration,
-      audioUrl: mp3
-        ? `/songs/${encodeURIComponent(slug)}/${encodeURIComponent(mp3)}`
+      audioUrl: mainAudio
+        ? `/songs/${encodeURIComponent(slug)}/${encodeURIComponent(mainAudio)}`
         : null,
       stems,
+      stemUrls,
+      chunks,
       stemBaseUrl: stems
         ? `/songs/${encodeURIComponent(slug)}/stems/`
         : undefined,
@@ -132,8 +208,15 @@ function walkFiles(dir: string, base = ""): string[] {
 function contentTypeFor(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   switch (ext) {
+    case ".flac":
+      return "audio/flac";
     case ".mp3":
       return "audio/mpeg";
+    case ".ogg":
+    case ".opus":
+      return "audio/ogg";
+    case ".wav":
+      return "audio/wav";
     case ".json":
       return "application/json; charset=utf-8";
     case ".md":

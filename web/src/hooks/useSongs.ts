@@ -16,8 +16,8 @@ export function useSongs() {
     setError(null);
     try {
       if (isNative()) {
-        // songs/ lives in the app's external files dir (pushed via adb)
-        setSongs(await listNativeSongs());
+        const result = await listNativeSongs();
+        setSongs(result);
       } else {
         const res = await fetch("/api/songs.json", { cache: "no-cache" });
         if (!res.ok) throw new Error(`Failed to load songs (${res.status})`);

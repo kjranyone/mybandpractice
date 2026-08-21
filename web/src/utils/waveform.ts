@@ -79,17 +79,17 @@ async function loadHiResPeaks(audioUrl: string): Promise<number[]> {
 
   let peaks: number[];
   try {
+    // Defer slightly so the initial stem decode at song start keeps the CPU.
+    await new Promise((r) => setTimeout(r, 400));
     const res = await fetch(audioUrl);
     if (!res.ok) throw new Error("fetch failed");
     const buf = await res.arrayBuffer();
-    const ctx = new AudioContext();
-    try {
-      const decoded = await ctx.decodeAudioData(buf.slice(0));
-      const ch = decoded.getChannelData(0);
-      peaks = downsamplePeaks(ch, HI_RES_BARS);
-    } finally {
-      void ctx.close();
-    }
+    // Decode at the library's native rate via an offline context: no
+    // resampling and no second hardware AudioContext on Android.
+    const ctx = new OfflineAudioContext(1, 128, 44100);
+    const decoded = await ctx.decodeAudioData(buf);
+    const ch = decoded.getChannelData(0);
+    peaks = downsamplePeaks(ch, HI_RES_BARS);
   } catch {
     peaks = syntheticPeaks(audioUrl, HI_RES_BARS);
   }

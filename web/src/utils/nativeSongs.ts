@@ -48,17 +48,8 @@ function toAbs(uri: string): string {
 }
 
 export async function ensureNativePermissions(): Promise<boolean> {
-  if (!isNative()) return true;
-  try {
-    const status = await Filesystem.checkPermissions();
-    if (status.publicStorage !== "granted") {
-      const req = await Filesystem.requestPermissions();
-      return req.publicStorage === "granted";
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  // App-specific external storage (/Android/data/<pkg>/files/) requires no runtime permissions
+  return true;
 }
 
 export async function listNativeSongs(): Promise<SongSummary[]> {
@@ -75,10 +66,24 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
 
   const songs: SongSummary[] = [];
   for (const entry of root.files) {
-    const isDir = entry.type?.toLowerCase() === "directory" || entry.type?.toLowerCase() === "dir";
-    if (!isDir) continue;
+    if (!entry.name || entry.name.startsWith(".") || entry.name.includes(".")) {
+      continue; // skip dotfiles / files with extensions at root
+    }
     const slug = entry.name;
     const dirPath = `${SONGS_ROOT}/${slug}`;
+
+    let baseUri = entry.uri;
+    if (!baseUri) {
+      try {
+        const uriRes = await Filesystem.getUri({
+          path: dirPath,
+          directory: Directory.External,
+        });
+        baseUri = uriRes.uri;
+      } catch {
+        /* ignore */
+      }
+    }
 
     const metaRaw = await readTextFile(`${dirPath}/meta.json`);
     let meta: Meta = {};
@@ -104,41 +109,131 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
       continue;
     }
 
-    const mp3 =
+    const AUDIO_EXTS = [".ogg", ".opus", ".flac", ".mp3", ".wav", ".m4a"];
+
+    const mainAudio =
+      files.find((f) => f.name === `${slug}.ogg`) ??
+      files.find((f) => f.name === `${slug}.opus`) ??
+      files.find((f) => f.name === `${slug}.flac`) ??
       files.find((f) => f.name === `${slug}.mp3`) ??
-      files.find((f) => f.name.toLowerCase().endsWith(".mp3"));
+      files.find((f) => f.name.toLowerCase().endsWith(".ogg")) ??
+      files.find((f) => f.name.toLowerCase().endsWith(".opus")) ??
+      files.find((f) => f.name.toLowerCase().endsWith(".flac")) ??
+      files.find((f) => f.name.toLowerCase().endsWith(".mp3")) ??
+      files.find((f) =>
+        AUDIO_EXTS.some((ext) => f.name.toLowerCase().endsWith(ext)),
+      );
 
     const duration =
       meta.audio?.output_duration_seconds ?? meta.yt_duration_seconds ?? null;
 
-    // Separated stems (bin/separate-stems.py) live in stems/<stem>.mp3
+    // Separated stems live in stems/<stem>.ogg, .flac or .mp3
     let stems: string[] | undefined;
+    let stemUrls: Record<string, string> | undefined;
     try {
       const stemDir = await Filesystem.readdir({
         path: `${dirPath}/stems`,
         directory: Directory.External,
       });
-      const found = stemDir.files
+      const validStemFiles = stemDir.files
         .map((f) => f.name ?? "")
-        .filter(
-          (f) =>
-            f.toLowerCase().endsWith(".mp3") &&
-            !["mix.mp3", "mixdown.mp3", "original.mp3"].includes(
-              f.toLowerCase(),
-            ),
-        )
-        .map((f) => f.slice(0, -".mp3".length))
-        .sort();
-      if (found.length > 0) stems = found;
+        .filter((name) => {
+          const lower = name.toLowerCase();
+          return (
+            AUDIO_EXTS.some((ext) => lower.endsWith(ext)) &&
+            !["mix", "mixdown", "original"].some((prefix) =>
+              lower.startsWith(prefix),
+            )
+          );
+        });
+
+      if (validStemFiles.length > 0) {
+        const stemsMap = new Map<string, string>(); // stemName -> fileName (.ogg/.opus prioritized)
+        for (const fname of validStemFiles) {
+          const extMatch = fname.match(/\.(ogg|opus|flac|mp3|wav|m4a)$/i);
+          if (!extMatch) continue;
+          const stemName = fname.slice(0, -extMatch[0].length);
+          const lower = fname.toLowerCase();
+          const existing = stemsMap.get(stemName);
+          if (
+            !existing ||
+            lower.endsWith(".ogg") ||
+            lower.endsWith(".opus") ||
+            (!existing.toLowerCase().endsWith(".ogg") && !existing.toLowerCase().endsWith(".opus") && lower.endsWith(".flac"))
+          ) {
+            stemsMap.set(stemName, fname);
+          }
+        }
+
+        if (stemsMap.size > 0) {
+          stems = Array.from(stemsMap.keys()).sort();
+          if (baseUri) {
+            stemUrls = {};
+            const stemDirAbs = `${toAbs(baseUri)}/stems`;
+            for (const [stemName, fname] of stemsMap.entries()) {
+              // Route through Capacitor's local file server: fetch() in the
+              // WebView rejects raw file:// URLs ("URL scheme file is not
+              // supported"), but convertFileSrc URLs are plain https and work.
+              stemUrls[stemName] = Capacitor.convertFileSrc(
+                `${stemDirAbs}/${encodeURIComponent(fname)}`,
+              );
+            }
+          }
+        }
+      }
     } catch {
       /* no stems dir */
     }
 
-    const audioUrl = mp3 && entry.uri
-      ? Capacitor.convertFileSrc(
-          `${toAbs(entry.uri)}/${encodeURIComponent(mp3.name)}`,
-        )
-      : null;
+    // Pre-split sample-aligned chunks (bin/make-stem-chunks.py) enable instant
+    // playback: only the chunk at the playhead is decoded up front.
+    let chunks: SongSummary["chunks"];
+    if (stems && baseUri) {
+      try {
+        const manifestRaw = await readTextFile(`${dirPath}/stems/chunks/chunks.json`);
+        if (manifestRaw) {
+          const manifest = JSON.parse(manifestRaw) as {
+            chunkSeconds?: number;
+            ext?: string;
+            stems?: Record<string, { count?: number }>;
+          };
+          const ext =
+            typeof manifest.ext === "string" &&
+            ["flac", "opus", "ogg"].includes(manifest.ext)
+              ? manifest.ext
+              : "flac";
+          if (
+            typeof manifest.chunkSeconds === "number" &&
+            manifest.chunkSeconds >= 5 &&
+            manifest.chunkSeconds <= 120 &&
+            manifest.stems
+          ) {
+            const chunksAbs = `${toAbs(baseUri)}/stems/chunks`;
+            const chunkStems: Record<string, { count: number; urlBase: string }> = {};
+            for (const [stemName, info] of Object.entries(manifest.stems)) {
+              if (stems.includes(stemName) && typeof info.count === "number" && info.count > 0) {
+                chunkStems[stemName] = {
+                  count: info.count,
+                  urlBase: Capacitor.convertFileSrc(`${chunksAbs}/${encodeURIComponent(stemName)}`),
+                };
+              }
+            }
+            if (Object.keys(chunkStems).length === stems.length) {
+              chunks = { chunkSeconds: manifest.chunkSeconds, ext, stems: chunkStems };
+            }
+          }
+        }
+      } catch {
+        /* malformed chunks manifest — fall back to whole-file stems */
+      }
+    }
+
+    const audioUrl =
+      mainAudio && baseUri
+        ? Capacitor.convertFileSrc(
+            `${toAbs(baseUri)}/${encodeURIComponent(mainAudio.name)}`,
+          )
+        : null;
 
     songs.push({
       slug,
@@ -147,9 +242,11 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
       durationSeconds: duration,
       audioUrl,
       stems,
+      stemUrls,
+      chunks,
       stemBaseUrl:
-        stems && entry.uri
-          ? `${Capacitor.convertFileSrc(toAbs(entry.uri))}/stems/`
+        stems && baseUri
+          ? `${Capacitor.convertFileSrc(toAbs(baseUri))}/stems/`
           : undefined,
       hasLyrics: files.some((f) => f.name === "lyrics.md"),
       sourceUrl: meta.source_url,

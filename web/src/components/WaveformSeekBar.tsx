@@ -24,6 +24,7 @@ type Props = {
   currentTime: number;
   duration: number;
   buffered: number;
+  buffering?: boolean;
   loop: LoopRegion | null;
   loopEnabled: boolean;
   markers: SongMarker[];
@@ -56,6 +57,7 @@ export function WaveformSeekBar({
   currentTime,
   duration,
   buffered,
+  buffering,
   loop,
   loopEnabled,
   markers,
@@ -553,6 +555,14 @@ export function WaveformSeekBar({
             className="waveform-hover-line"
             style={{ left: `${hoverRatio * 100}%` }}
           />
+        )}
+
+        {/* Buffering Spinner Overlay */}
+        {buffering && (
+          <div className="waveform-buffering-overlay" aria-label="Buffering audio...">
+            <div className="waveform-spinner" />
+            <span className="waveform-buffering-text">Buffering</span>
+          </div>
         )}
       </div>
 
