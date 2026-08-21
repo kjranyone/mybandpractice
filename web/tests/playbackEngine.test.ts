@@ -43,6 +43,10 @@ class FakeAudioContext {
   currentTime = 100; // start away from zero so clock math is visible
   destination = new FakeNode();
   audioWorklet = { addModule: vi.fn(async () => undefined) };
+  /** per-instance chunk-decode gate + result (set by race tests) */
+  decodeGate: Promise<void> = Promise.resolve();
+  decodeResult: AudioBuffer | null = { duration: 30 } as unknown as AudioBuffer;
+  decodeOk = true;
   constructor() {
     FakeAudioContext.instances.push(this);
   }
@@ -56,6 +60,11 @@ class FakeAudioContext {
   createBufferSource() {
     return new FakeNode() as unknown as AudioBufferSourceNode;
   }
+  decodeAudioData = vi.fn(async () => {
+    await this.decodeGate;
+    if (!this.decodeOk) throw new Error("decode failed");
+    return this.decodeResult;
+  });
 }
 
 /** Advance the fake clock and fire onended for stopped sources. */
@@ -279,5 +288,153 @@ describe("PlaybackEngine", () => {
     const ctx = FakeAudioContext.instances[0];
     advance(engine, 5, () => undefined);
     expect(ctx.currentTime).toBe(105);
+  });
+
+  // ------------------------------------------------------- ownership races
+
+  /** Build a chunked song pre-loaded into the engine. Chunk decode awaits
+   * `gate` (default: resolved) so tests can interleave engine calls
+   * mid-decode, exercising the startSeq ownership token. */
+  function setupChunkedRace(opts?: { gate?: Promise<void>; fetchOk?: boolean }) {
+    const events = makeEvents();
+    const engine = new PlaybackEngine(events);
+
+    const cs = {
+      kind: "chunked" as const,
+      slug: "race",
+      chunkSeconds: 30,
+      ext: "opus",
+      stems: ["vocals", "drums"],
+      counts: { vocals: 2, drums: 2 },
+      urlBases: { vocals: "/c/vocals", drums: "/c/drums" },
+      chunks: new Map([
+        ["vocals", [null, null] as (AudioBuffer | null)[]],
+        ["drums", [null, null] as (AudioBuffer | null)[]],
+      ]),
+      inflight: new Map<string, Promise<AudioBuffer | null>>(),
+      duration: 60,
+    };
+    engine.load(cs);
+
+    const fetchOk = opts?.fetchOk ?? true;
+    const fetchMock = vi.fn(async () => {
+      if (!fetchOk) return { ok: false, status: 404 } as unknown as Response;
+      return {
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(8),
+      } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    return { engine, events, cs, fetchMock, gate: opts?.gate };
+  }
+
+  it("startChunkedAt takes over synchronously (audio stops before await)", async () => {
+    const gate = new Promise<void>(() => undefined); // never resolves
+    const { engine, cs } = setupChunkedRace({ gate });
+    await engine.ensureGraph();
+    // route the pending decode through the gate
+    FakeAudioContext.instances[0].decodeGate = gate;
+
+    const stopSpy = vi.spyOn(engine, "stopSources");
+    const before = FakeAudioContext.instances[0].currentTime;
+
+    const p = engine.startChunkedAt(45, cs); // second chunk
+    // By the first await, sources were already stopped and the clock frozen:
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    // frozen at the seek target (45s → chunk 1, intra 15)
+    expect(engine.currentTime).toBe(45);
+    expect(FakeAudioContext.instances[0].currentTime).toBe(before); // no time travel
+
+    void p;
+  });
+
+  it("a newer seek during a slow chunk decode supersedes the older start", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { engine, cs } = setupChunkedRace({ gate });
+    await engine.ensureGraph();
+    FakeAudioContext.instances[0].decodeGate = gate;
+
+    engine.playing = true;
+    const first = engine.startChunkedAt(45, cs); // slow decode pending
+    const second = engine.startChunkedAt(0, cs); // takes ownership (startSeq++)
+
+    release();
+    const [res1, res2] = await Promise.all([first, second]);
+    expect(res1).toBe("superseded"); // older start aborted silently
+    expect(res2).toBe("started"); // newer start owns playback
+  });
+
+  it("pause during a slow chunk decode supersedes the start (no zombie audio)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { engine, events, cs } = setupChunkedRace({ gate });
+    await engine.ensureGraph();
+    FakeAudioContext.instances[0].decodeGate = gate;
+
+    engine.playing = true;
+    const start = engine.startChunkedAt(0, cs);
+    engine.pause(); // user pauses while the chunk is still decoding
+
+    release();
+    const res = await start;
+    expect(res).toBe("superseded");
+    // paused state survives — the late start must not resurrect playback
+    expect(engine.playing).toBe(false);
+    expect(events.onPlayingChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("a failed chunk row reports failed and stays stopped", async () => {
+    const events = makeEvents();
+    const engine = new PlaybackEngine(events);
+    const cs = {
+      kind: "chunked" as const,
+      slug: "failing",
+      chunkSeconds: 30,
+      ext: "opus",
+      stems: ["vocals"],
+      counts: { vocals: 1 },
+      urlBases: { vocals: "/c/vocals" },
+      chunks: new Map([["vocals", [null] as (AudioBuffer | null)[]]]),
+      inflight: new Map<string, Promise<AudioBuffer | null>>(),
+      duration: 30,
+    };
+    engine.load(cs);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 404 }) as unknown as Response),
+    );
+
+    await engine.ensureGraph();
+    engine.playing = true;
+    const res = await engine.startChunkedAt(0, cs);
+    expect(res).toBe("failed");
+    expect(engine.playing).toBe(true); // caller (startPlaybackAt) decides reset
+    expect(events.onBufferingChange).toHaveBeenLastCalledWith(false);
+    expect(cs.chunks.get("vocals")![0]).toBeNull(); // nothing cached on failure
+  });
+
+  it("chunk decode success caches the buffer for instant later seeks", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { engine, cs } = setupChunkedRace({ gate });
+    await engine.ensureGraph();
+    FakeAudioContext.instances[0].decodeGate = gate;
+
+    engine.playing = true;
+    const start = engine.startChunkedAt(45, cs);
+    release();
+    expect(await start).toBe("started");
+    // chunk row 1 is now cached for both stems
+    expect(cs.chunks.get("vocals")![1]).not.toBeNull();
+    expect(cs.chunks.get("drums")![1]).not.toBeNull();
   });
 });

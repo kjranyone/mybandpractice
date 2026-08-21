@@ -1,4 +1,24 @@
-# Issue: 曲選択時の再生挙動・ステムミキサーの適用不具合調査と修正
+# Issue #11: 曲選択時の再生挙動・ステムミキサーの適用不具合 (RESOLVED)
+
+> **Status: RESOLVED.** 元の分析ノートを下に残していますが、記載されている
+> アーキテクチャ（`file://` 直接 fetch、`ensureAudioGraph` の fire-and-forget、
+> HTMLAudioElement ストリームプール等）は**すべて現行コードには存在しません**。
+> 現状は `src/audio/PlaybackEngine.ts`（React 非依存の再生エンジン）による
+> チャンクストリーミング再生です。
+>
+> 解決の要点:
+> 1. **BUFFERING 表示** — 曲タップ直後に中央オーバーレイ + 行スピナーを即時描画
+>    （デコード開始前に 2 rAF + 30ms の描画 yield を挟む）
+> 2. **原音リーク** — グラフ初期化は共有 Promise で完全 await 保証、stem GainNode
+>    は保存済みミキサーレベルで生成（デフォルト 1.0 は存在しない）
+> 3. **起動速度** — 30 秒サンプル整列 Opus チャンク (bin/make-stem-chunks.py) で
+>    再生開始 3.4s → ~0.4s。ミキサーは最初のサンプルから有効
+>
+> 詳細は README「チャンク分割」セクションとコミット履歴 (PR #12 以降) を参照。
+
+---
+
+# 以下、当時の調査ノート (historical)
 
 ## 1. 概要 (Summary)
 Android 実機（ALLDOCUBE iPlay60_mini_Pro, Android 14）において、曲リストから曲を選択して再生する際に、以下の明確な不具合事象が確認されています。
