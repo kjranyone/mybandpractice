@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  web:
+    name: Web (typecheck + test + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit -p tsconfig.json
+      - run: npx tsc --noEmit -p tsconfig.node.json
+      - run: npm test
+      - run: npm run build
+
+  bin:
+    name: bin (ruff + manifest smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
+      - name: Lint pipeline scripts
+        run: |
+          ruff check bin/mbp.py bin/make-stem-chunks.py bin/convert-audio.py bin/separate-stems.py
+          ruff check bin/analyze-chords.py --select E9,F821,F811,F401,I001
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax-check all bin scripts
+        run: python -c "import ast,glob; [ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('bin/*.py')]; print('syntax OK')"

@@ -4,6 +4,12 @@ import {
   createPitchNode,
   registerPitchWorklet,
 } from "../audio/pitchWorklet";
+import {
+  chunkUrl,
+  effectiveRowDuration,
+  locateChunk,
+  rowWallDuration,
+} from "../audio/chunkMath";
 import type { SongSummary } from "../types";
 import { clamp } from "../utils/format";
 
@@ -128,8 +134,20 @@ const MAX_CACHE_SONGS = 2;
 const MAX_CHUNK_CACHE_SONGS = 2;
 /** Decode-ahead lead time (wall seconds) before scheduling the next chunk. */
 const CHUNK_KICK_LEAD = 1.0;
-/** Schedule the next chunk's sources this close to the boundary (wall secs). */
-const CHUNK_SCHEDULE_LEAD = 0.12;
+/** Schedule the next chunk's sources this close to the boundary (wall secs).
+ * Must exceed ENGINE_TICK_MS granularity so a tick always lands inside the
+ * lead window (worker ticks replace RAF, which dies when the screen is off). */
+const CHUNK_SCHEDULE_LEAD = 0.25;
+
+/**
+ * Dedicated-worker ticker that drives the playback engine (JIT chunk
+ * scheduling, loop/end handling) at a fixed cadence. requestAnimationFrame
+ * stops when the Android screen turns off, which froze chunk streaming at
+ * the first 30s boundary and killed background playback; worker timers keep
+ * firing while the media-session foreground service holds the process alive.
+ */
+const ENGINE_TICK_MS = 100;
+const ENGINE_TICK_WORKER_SRC = `let id=null;onmessage=e=>{if(e.data==="start"&&id===null){id=setInterval(()=>postMessage(0),${ENGINE_TICK_MS});}else if(e.data==="stop"&&id!==null){clearInterval(id);id=null;}};`;
 
 export function useAudioPlayer(songs: SongSummary[]) {
   const songsRef = useRef(songs);
@@ -204,6 +222,9 @@ export function useAudioPlayer(songs: SongSummary[]) {
     nextWallTime: number;
     kick: Promise<boolean> | null;
   } | null>(null);
+  // Engine tick (worker-driven; runs even when the screen is off)
+  const engineTickRef = useRef<(() => void) | null>(null);
+  const engineWorkerRef = useRef<Worker | null>(null);
 
   // Playback tracking timestamps
   const startTimeRef = useRef(0); // ctx.currentTime when playback started
@@ -519,7 +540,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
 
       const promise = (async (): Promise<AudioBuffer | null> => {
         const ctx = audioCtxRef.current ?? getAudioContext();
-        const url = `${cs.urlBases[stem]}/${idx.toString().padStart(5, "0")}.${cs.ext}`;
+        const url = chunkUrl(cs.urlBases[stem], idx, cs.ext);
         try {
           const t0 = performance.now();
           const res = await fetch(url);
@@ -580,10 +601,14 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const wantSlug = cs.slug;
 
       const CD = cs.chunkSeconds;
-      const dur = cs.duration || 1;
-      const safeOffset = clamp(offsetSec, 0, dur);
-      const i0 = Math.min(cs.counts[cs.stems[0]] - 1, Math.floor(safeOffset / CD));
-      const intra = Math.max(0, safeOffset - i0 * CD);
+      const leadCount = cs.counts[cs.stems[0]];
+      const { idx: i0, intra } = locateChunk(
+        offsetSec,
+        CD,
+        leadCount,
+        cs.duration,
+      );
+      const safeOffset = i0 * CD + intra;
 
       // --- Synchronous take-over: kill old audio NOW, freeze clock at target
       stopActiveSources(8);
@@ -619,8 +644,8 @@ export function useAudioPlayer(songs: SongSummary[]) {
       // Effective row duration: lossy codecs may decode with end padding
       // (e.g. Opus 20ms frames); clamp to the nominal boundary and hard-stop
       // sources there so scheduled rows stay sample-aligned.
-      const rowDur = Math.min(leadBuf.duration, CD + 0.001);
-      const rowWallDur = Math.max(0.05, (rowDur - intra) / rate);
+      const rowDur = effectiveRowDuration(leadBuf.duration, CD);
+      const rowWallDur = rowWallDuration(rowDur, intra, rate);
 
       for (const stemName of cs.stems) {
         const buf = cs.chunks.get(stemName)![i0]!;
@@ -643,6 +668,14 @@ export function useAudioPlayer(songs: SongSummary[]) {
         src.connect(stemGain);
         src.start(now, Math.min(intra, Math.max(0, buf.duration - 0.01)));
         src.stop(now + rowWallDur);
+        if (stemName === cs.stems[0]) {
+          // Boundary safety net: an immediate engine tick when the lead
+          // source ends recovers scheduling even if timer ticks jittered
+          // (fires from the audio thread's end-of-source dispatch).
+          src.onended = () => {
+            if (playingRef.current) engineTickRef.current?.();
+          };
+        }
         activeSourcesRef.current.set(`${stemName}#${i0}`, src);
       }
 
@@ -686,7 +719,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
 
       // Clamp to the nominal chunk boundary (lossy padding defense) and
       // advance the schedule by the same effective duration.
-      const rowDur = Math.min(leadBuf.duration, cs.chunkSeconds + 0.001);
+      const rowDur = effectiveRowDuration(leadBuf.duration, cs.chunkSeconds);
       const when = Math.max(sched.nextWallTime, ctx.currentTime + 0.005);
       for (const stemName of cs.stems) {
         const buf = cs.chunks.get(stemName)![idx]!;
@@ -697,6 +730,11 @@ export function useAudioPlayer(songs: SongSummary[]) {
         src.connect(stemGain);
         src.start(when, 0);
         src.stop(when + rowDur / rate);
+        if (stemName === cs.stems[0]) {
+          src.onended = () => {
+            if (playingRef.current) engineTickRef.current?.();
+          };
+        }
         activeSourcesRef.current.set(`${stemName}#${idx}`, src);
       }
       sched.nextWallTime = when + rowDur / rate;
@@ -1279,69 +1317,99 @@ export function useAudioPlayer(songs: SongSummary[]) {
     else seek(0);
   }, [getComputedCurrentTime, seek]);
 
-  // Main playback animation & loop / end trigger loop
+  // Playback engine tick: chunk JIT scheduling + loop/end handling + clock.
+  // Driven by the worker ticker (works with the screen off) and by lead
+  // sources' onended (boundary recovery). Single driver — no double triggers.
+  const engineTick = useCallback(() => {
+    if (!playingRef.current) return;
+
+    tickChunkScheduler();
+
+    const t = getComputedCurrentTime();
+    const dur = durationRef.current;
+    const lp = loopRef.current;
+
+    // Loop handling
+    if (loopEnabledRef.current && lp && lp.end > lp.start) {
+      if (t >= lp.end - 0.02) {
+        seek(lp.start);
+        return;
+      }
+    }
+
+    // Track ended handling
+    if (currentRef.current && dur > 1 && t >= dur - 0.05 && t > 0.5) {
+      const cur = currentRef.current;
+      const idx = songsRef.current.findIndex((s) => s.slug === cur.slug);
+      if (loopEnabledRef.current && lp) {
+        seek(lp.start);
+      } else if (playbackModeRef.current === "repeat-one") {
+        seek(0);
+      } else if (idx !== -1) {
+        const next =
+          songsRef.current[idx + 1] ??
+          (playbackModeRef.current === "repeat-all" ? songsRef.current[0] : undefined);
+        if (next) {
+          void playSongRef.current(next);
+        } else {
+          pause();
+          seek(0);
+        }
+      } else {
+        pause();
+        seek(0);
+      }
+      return;
+    }
+
+    setCurrentTime(t);
+    currentTimeRef.current = t;
+  }, [getComputedCurrentTime, pause, seek, tickChunkScheduler]);
+
+  // Keep the worker's tick handler pointing at the latest engineTick closure
+  useEffect(() => {
+    engineTickRef.current = engineTick;
+  }, [engineTick]);
+
+  // Start the engine ticker once: dedicated worker (immune to screen-off RAF
+  // suspension); window timer fallback for exotic WebView builds.
+  useEffect(() => {
+    try {
+      const url = URL.createObjectURL(
+        new Blob([ENGINE_TICK_WORKER_SRC], { type: "application/javascript" }),
+      );
+      const w = new Worker(url);
+      w.onmessage = () => engineTickRef.current?.();
+      w.postMessage("start");
+      engineWorkerRef.current = w;
+      return () => {
+        w.terminate();
+        engineWorkerRef.current = null;
+      };
+    } catch {
+      const tid = window.setInterval(() => engineTickRef.current?.(), ENGINE_TICK_MS);
+      return () => window.clearInterval(tid);
+    }
+  }, []);
+
+  // Foreground-only smooth UI clock (engine logic lives in the worker ticker)
   useEffect(() => {
     let animId = 0;
-    const checkPlayback = () => {
+    const uiFrame = () => {
       if (playingRef.current) {
-        tickChunkScheduler();
         const t = getComputedCurrentTime();
-        const dur = durationRef.current;
-        const lp = loopRef.current;
-
-        // Loop handling
-        if (loopEnabledRef.current && lp && lp.end > lp.start) {
-          if (t >= lp.end - 0.02) {
-            seek(lp.start);
-            animId = requestAnimationFrame(checkPlayback);
-            return;
-          }
-        }
-
-        // Track ended handling: strictly check that we are playing, valid song, valid duration, and reached end
-        if (
-          playingRef.current &&
-          currentRef.current &&
-          dur > 1 &&
-          t >= dur - 0.05 &&
-          t > 0.5
-        ) {
-          const cur = currentRef.current;
-          const idx = cur ? songsRef.current.findIndex((s) => s.slug === cur.slug) : -1;
-          if (loopEnabledRef.current && lp) {
-            seek(lp.start);
-          } else if (playbackModeRef.current === "repeat-one") {
-            seek(0);
-          } else if (idx !== -1) {
-            const next =
-              songsRef.current[idx + 1] ??
-              (playbackModeRef.current === "repeat-all" ? songsRef.current[0] : undefined);
-            if (next) {
-              void playSongRef.current(next);
-            } else {
-              pause();
-              seek(0);
-            }
-          } else {
-            pause();
-            seek(0);
-          }
-          animId = requestAnimationFrame(checkPlayback);
-          return;
-        }
-
         setCurrentTime(t);
         currentTimeRef.current = t;
       }
-      animId = requestAnimationFrame(checkPlayback);
+      animId = requestAnimationFrame(uiFrame);
     };
 
-    animId = requestAnimationFrame(checkPlayback);
+    animId = requestAnimationFrame(uiFrame);
     return () => {
       if (animId) cancelAnimationFrame(animId);
       stopActiveSources();
     };
-  }, [getComputedCurrentTime, pause, playNext, seek, stopActiveSources, tickChunkScheduler]);
+  }, [getComputedCurrentTime, stopActiveSources]);
 
   return {
     current,
