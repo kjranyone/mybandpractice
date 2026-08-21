@@ -188,16 +188,23 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
 
     // Pre-split sample-aligned chunks (bin/make-stem-chunks.py) enable instant
     // playback: only the chunk at the playhead is decoded up front.
+    // The device library may hold chunks only (bin/sync.ps1 skips whole-file
+    // stems when chunks exist), so derive the stem list from the manifest
+    // when no whole stem files were found.
     let chunks: SongSummary["chunks"];
-    if (stems && baseUri) {
+    if (baseUri) {
       try {
         const manifestRaw = await readTextFile(`${dirPath}/stems/chunks/chunks.json`);
         if (manifestRaw) {
           const parsed = parseChunkManifest(JSON.parse(manifestRaw));
-          if (parsed && stems.every((s) => parsed.stems[s])) {
+          if (
+            parsed &&
+            (!stems || stems.every((s) => parsed.stems[s]))
+          ) {
+            const chunkStemNames = stems ?? Object.keys(parsed.stems).sort();
             const chunksAbs = `${toAbs(baseUri)}/stems/chunks`;
             const chunkStems: Record<string, { count: number; urlBase: string }> = {};
-            for (const stemName of stems) {
+            for (const stemName of chunkStemNames) {
               chunkStems[stemName] = {
                 count: parsed.stems[stemName].count,
                 urlBase: Capacitor.convertFileSrc(
@@ -210,6 +217,7 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
               ext: parsed.ext,
               stems: chunkStems,
             };
+            if (!stems) stems = chunkStemNames; // chunk-only library
           }
         }
       } catch {
@@ -234,7 +242,7 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
       stemUrls,
       chunks,
       stemBaseUrl:
-        stems && baseUri
+        stemUrls && baseUri
           ? `${Capacitor.convertFileSrc(toAbs(baseUri))}/stems/`
           : undefined,
       hasLyrics: files.some((f) => f.name === "lyrics.md"),
