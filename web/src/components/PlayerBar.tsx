@@ -13,6 +13,7 @@ import { Modal } from "./Modal";
 import { SpeedControl } from "./SpeedControl";
 import { StemFader } from "./StemFader";
 import { VolumeFader } from "./VolumeFader";
+import { formatGain } from "../audio/gain";
 import { WaveformSeekBar } from "./WaveformSeekBar";
 
 const PITCH_PRESETS = [-5, -2, -1, 0, 1, 2, 5];
@@ -328,7 +329,7 @@ export function PlayerBar({
             aria-label="Open mixer"
             title={`Mixer — speed ${playbackRate.toFixed(2)}×, ${
               allStemsOn ? "original mix" : `stems: ${touched.join(", ")} attenuated`
-            }, volume ${Math.round((muted ? 0 : volume) * 100)}%`}
+            }, volume ${formatGain(muted ? 0 : volume)}`}
           >
             <span
               className={`mx-stat${Math.abs(playbackRate - 1) >= 0.005 ? " is-on" : ""}`}
@@ -370,12 +371,14 @@ export function PlayerBar({
               aria-label={
                 muted || volume === 0
                   ? "muted"
-                  : `volume ${Math.round(volume * 100)}%`
+                  : `volume ${formatGain(volume)}`
               }
             >
               <span
-                className="mx-vol-fill"
-                style={{ width: `${Math.round((muted ? 0 : volume) * 100)}%` }}
+                className={`mx-vol-fill${volume > 1 ? " is-boost" : ""}`}
+                style={{
+                  width: `${Math.min(100, Math.round((muted ? 0 : volume) * 100))}%`,
+                }}
               />
               <span className="mx-vol-text">
                 {muted || volume === 0 ? "M" : `${Math.round(volume * 100)}`}

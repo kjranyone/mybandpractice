@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PlaybackEngine, type LoopRegion } from "../audio/PlaybackEngine";
+import { MAX_GAIN } from "../audio/gain";
 import type { SongSummary } from "../types";
 import { clamp } from "../utils/format";
 
@@ -44,7 +45,7 @@ type MixerSettings = {
 
 const DEFAULT_MIXER_SETTINGS: MixerSettings = {
   stemLevels: { vocals: 1, drums: 1, bass: 1, other: 1 },
-  volume: 0.85,
+  volume: 1,
   muted: false,
   pitch: 0,
   playbackRate: 1,
@@ -55,9 +56,16 @@ function loadSavedMixerSettings(): MixerSettings {
     const raw = localStorage.getItem(MIXER_STORAGE_KEY);
     if (!raw) return DEFAULT_MIXER_SETTINGS;
     const parsed = JSON.parse(raw);
+    const stems = DEFAULT_MIXER_SETTINGS.stemLevels;
+    const stemLevels: Record<string, number> = { ...stems };
+    if (parsed.stemLevels && typeof parsed.stemLevels === "object") {
+      for (const [k, v] of Object.entries(parsed.stemLevels)) {
+        if (typeof v === "number") stemLevels[k] = clamp(v, 0, MAX_GAIN);
+      }
+    }
     return {
-      stemLevels: parsed.stemLevels ?? DEFAULT_MIXER_SETTINGS.stemLevels,
-      volume: typeof parsed.volume === "number" ? clamp(parsed.volume, 0, 1) : 0.85,
+      stemLevels,
+      volume: typeof parsed.volume === "number" ? clamp(parsed.volume, 0, MAX_GAIN) : 1,
       muted: typeof parsed.muted === "boolean" ? parsed.muted : false,
       pitch: typeof parsed.pitch === "number" ? clamp(parsed.pitch, -12, 12) : 0,
       playbackRate:
@@ -71,6 +79,76 @@ function loadSavedMixerSettings(): MixerSettings {
 function saveMixerSettingsToStorage(settings: MixerSettings) {
   try {
     localStorage.setItem(MIXER_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+/**
+ * Trailing debounce for mixer persistence: fader drags fire dozens of
+ * updates per second; coalescing keeps the synchronous localStorage write
+ * (which can spike on the Android WebView main thread) to one per gesture.
+ */
+const MIXER_SAVE_DEBOUNCE_MS = 300;
+
+function createDebouncedSaver<A extends unknown[]>(fn: (...args: A) => void) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pending: A | null = null;
+  const flush = () => {
+    timer = null;
+    if (pending) {
+      const args = pending;
+      pending = null;
+      fn(...args);
+    }
+  };
+  const debounced = (...args: A) => {
+    pending = args;
+    if (timer === null) timer = setTimeout(flush, MIXER_SAVE_DEBOUNCE_MS);
+  };
+  return Object.assign(debounced, {
+    /** Write out any pending update immediately (app going away). */
+    flushNow: flush,
+  });
+}
+
+// Loop regions are device-local practice markers: per-song {start, end}
+// plus whether looping was active, restored when the song is reopened.
+const LOOP_STORAGE_KEY = "mybandpractice:loop-settings";
+
+type StoredLoop = { start: number; end: number; enabled: boolean };
+
+function loadSavedLoops(): Record<string, StoredLoop> {
+  try {
+    const raw = localStorage.getItem(LOOP_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, StoredLoop> = {};
+    for (const [slug, v] of Object.entries(parsed)) {
+      if (
+        v &&
+        typeof v === "object" &&
+        typeof (v as StoredLoop).start === "number" &&
+        typeof (v as StoredLoop).end === "number" &&
+        (v as StoredLoop).end > (v as StoredLoop).start
+      ) {
+        out[slug] = {
+          start: (v as StoredLoop).start,
+          end: (v as StoredLoop).end,
+          enabled: (v as StoredLoop).enabled === true,
+        };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveLoopsToStorage(loops: Record<string, StoredLoop>) {
+  try {
+    localStorage.setItem(LOOP_STORAGE_KEY, JSON.stringify(loops));
   } catch {
     /* ignore storage errors */
   }
@@ -91,6 +169,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
   songsRef.current = songs;
 
   const savedMixer = useRef(loadSavedMixerSettings());
+  const savedLoops = useRef(loadSavedLoops());
 
   const [current, setCurrent] = useState<SongSummary | null>(null);
   const currentRef = useRef<SongSummary | null>(null);
@@ -213,14 +292,21 @@ export function useAudioPlayer(songs: SongSummary[]) {
         return;
       }
 
-      // UI-owned song state resets immediately (engine reset happens inside
-      // engine.playSong synchronously before any await).
+      // UI-owned song state swaps immediately (engine reset happens inside
+      // engine.playSong synchronously before any await). Loop settings are
+      // per-song and device-local: restore the saved practice loop, if any.
+      const saved = savedLoops.current[song.slug] ?? null;
+      const region: LoopRegion | null = saved
+        ? { start: saved.start, end: saved.end }
+        : null;
       setCurrent(song);
       currentRef.current = song;
-      setLoopState(null);
-      setLoopEnabledState(false);
-      loopRef.current = null;
-      loopEnabledRef.current = false;
+      engine.loop = region;
+      engine.loopEnabled = saved?.enabled ?? false;
+      setLoopState(region);
+      setLoopEnabledState(saved?.enabled ?? false);
+      loopRef.current = region;
+      loopEnabledRef.current = saved?.enabled ?? false;
 
       await engine.playSong(song, {
         isStale: () => currentRef.current?.slug !== song.slug,
@@ -248,8 +334,9 @@ export function useAudioPlayer(songs: SongSummary[]) {
     [engine, seek],
   );
 
+  const mixerSaverRef = useRef(createDebouncedSaver(saveMixerSettingsToStorage));
   const persistMixer = useCallback(() => {
-    saveMixerSettingsToStorage({
+    mixerSaverRef.current({
       stemLevels: engine.stemLevels,
       volume: engine.volume,
       muted: engine.muted,
@@ -260,7 +347,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
 
   const setStemLevel = useCallback(
     (name: string, level: number) => {
-      const next = { ...engine.stemLevels, [name]: clamp(level, 0, 1) };
+      const next = { ...engine.stemLevels, [name]: clamp(level, 0, MAX_GAIN) };
       engine.stemLevels = next;
       setStemLevelsState(next);
       engine.applyStemGains(next);
@@ -318,11 +405,24 @@ export function useAudioPlayer(songs: SongSummary[]) {
     [engine, persistMixer],
   );
 
+  const persistLoop = useCallback(
+    (slug: string, entry: StoredLoop | null) => {
+      const next = { ...savedLoops.current };
+      if (entry) next[slug] = entry;
+      else delete next[slug];
+      savedLoops.current = next;
+      saveLoopsToStorage(next);
+    },
+    [],
+  );
+
   const setLoop = useCallback(
     (region: LoopRegion | null) => {
+      const slug = currentRef.current?.slug;
       if (!region) {
         engine.loop = null;
         setLoopState(null);
+        if (slug) persistLoop(slug, null);
         return;
       }
       const dur = engine.duration || Infinity;
@@ -338,8 +438,9 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const next = { start, end };
       engine.loop = next;
       setLoopState(next);
+      if (slug) persistLoop(slug, { ...next, enabled: engine.loopEnabled });
     },
-    [engine],
+    [engine, persistLoop],
   );
 
   const setLoopEnabled = useCallback(
@@ -351,16 +452,20 @@ export function useAudioPlayer(songs: SongSummary[]) {
         const curT = engine.currentTime;
         if (curT < lp.start || curT >= lp.end) seek(lp.start);
       }
+      const slug = currentRef.current?.slug;
+      if (slug && lp) persistLoop(slug, { start: lp.start, end: lp.end, enabled: on });
     },
-    [engine, seek],
+    [engine, seek, persistLoop],
   );
 
   const clearLoop = useCallback(() => {
+    const slug = currentRef.current?.slug;
     engine.loop = null;
     engine.loopEnabled = false;
     setLoopState(null);
     setLoopEnabledState(false);
-  }, [engine]);
+    if (slug) persistLoop(slug, null);
+  }, [engine, persistLoop]);
 
   const setLoopIn = useCallback(() => {
     const t = engine.currentTime;
@@ -443,6 +548,19 @@ export function useAudioPlayer(songs: SongSummary[]) {
       engine.stopSources();
     };
   }, [engine]);
+
+  // Flush any debounced mixer write when the app is backgrounded/killed —
+  // Android WebView may never fire the trailing timer after a page freeze.
+  useEffect(() => {
+    const flush = () => mixerSaverRef.current.flushNow();
+    document.addEventListener("visibilitychange", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", flush);
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, []);
 
   return {
     current,
