@@ -233,6 +233,12 @@ export function WaveformSeekBar({
 
     // Waveform drag = scrub seek only (loop selection lives on the time bar)
     if (mode.kind === "seek") {
+      // Scrubbing cancels the pending long-press marker popup
+      const lp = longPressRef.current;
+      if (lp && Math.abs(e.clientX - lp.x) > DRAG_THRESHOLD_PX) {
+        window.clearTimeout(lp.timer);
+        longPressRef.current = null;
+      }
       onSeek(t);
       return;
     }
