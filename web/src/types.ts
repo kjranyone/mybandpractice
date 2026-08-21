@@ -24,6 +24,27 @@ export type SongSummary = {
   composer?: string;
 };
 
+/** Raw meta.json shape (snake_case, written by the bin/ pipeline). */
+export type SongMeta = {
+  slug: string;
+  title: string;
+  artist: string;
+  source_url?: string;
+  yt_duration_seconds?: number;
+  audio?: {
+    file?: string;
+    output_duration_seconds?: number;
+  };
+  lyrics?: {
+    source_url?: string;
+    matched_artist?: string;
+    lyricist?: string;
+    composer?: string;
+    stanza_count?: number;
+    line_count?: number;
+  };
+};
+
 export type LyricsResponse = {
   slug: string;
   markdown: string;

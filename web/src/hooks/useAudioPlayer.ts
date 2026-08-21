@@ -105,7 +105,6 @@ export function useAudioPlayer(songs: SongSummary[]) {
   const [playbackMode, setPlaybackModeState] = useState<PlaybackMode>("sequential");
   const playbackModeRef = useRef<PlaybackMode>("sequential");
   playbackModeRef.current = playbackMode;
-
   const [volume, setVolumeState] = useState(savedMixer.current.volume);
   const [muted, setMutedState] = useState(savedMixer.current.muted);
   const [playbackRate, setPlaybackRateState] = useState(savedMixer.current.playbackRate);
@@ -171,26 +170,6 @@ export function useAudioPlayer(songs: SongSummary[]) {
   }
   const engine = engineRef.current;
 
-  const reportError = useCallback((msg: string) => {
-    setPlaybackError(msg);
-    window.setTimeout(() => {
-      setPlaybackError((cur) => (cur === msg ? null : cur));
-    }, 4500);
-  }, []);
-
-  // --- paint yield so buffering spinners render before decode starts ------
-  const yieldToPaint = useCallback(
-    () =>
-      new Promise<void>((r) => {
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            setTimeout(r, 30);
-          }),
-        );
-      }),
-    [],
-  );
-
   const prefetchAbortRef = useRef<AbortController | null>(null);
 
   const prefetchAdjacentSongs = useCallback(
@@ -234,109 +213,21 @@ export function useAudioPlayer(songs: SongSummary[]) {
         return;
       }
 
-      engine.stopSources(8);
-      engine.playing = false;
-      setPlaying(false);
+      // UI-owned song state resets immediately (engine reset happens inside
+      // engine.playSong synchronously before any await).
       setCurrent(song);
       currentRef.current = song;
-      engine.resetClock(0);
-      engine.duration = song.durationSeconds || 0;
-      setDuration(song.durationSeconds || 0);
       setLoopState(null);
       setLoopEnabledState(false);
       loopRef.current = null;
       loopEnabledRef.current = false;
 
-      // 1. Full-buffer memory cache (0ms instant start)
-      const cached = engine.getFullCached(song.slug);
-      if (cached) {
-        engine.load(cached);
-        engine.startFullAt(0, cached);
-        engine.playing = true;
-        setPlaying(true);
-        setBuffered(1);
-        setBuffering(false);
-        setTimeout(() => prefetchAdjacentSongs(song), 1000);
-        return;
-      }
-
-      // 1.5 Chunked fast path: decode only the first ~30s row, start
-      // playing, then stream the rest just-in-time.
-      const chunked = engine.getOrCreateChunked(song);
-      if (chunked) {
-        engine.load(chunked);
-        setBuffering(true);
-        setBuffered(0.05);
-        await yieldToPaint();
-
-        const ctx = await engine.ensureGraph();
-        if (ctx.state === "suspended") void ctx.resume();
-
-        const res = await engine.startChunkedAt(0, chunked);
-        if (res === "superseded") return; // a seek/toggle during load owns it
-        if (res === "failed") {
-          if (currentRef.current?.slug === song.slug) {
-            setBuffering(false);
-            setBuffered(0);
-            engine.playing = false;
-            setPlaying(false);
-            reportError("Could not decode this song's audio");
-          }
-          return;
-        }
-        engine.playing = true;
-        setPlaying(true);
-        setBuffered(1);
-        setBuffering(false);
-        setTimeout(() => prefetchAdjacentSongs(song), 800);
-        return;
-      }
-
-      // 2. Full decode path — global buffering UI shows instantly, mixer
-      //    gains are guaranteed before the first sample.
-      setBuffering(true);
-      setBuffered(0.05);
-      await yieldToPaint();
-
-      const loadAbort = new AbortController();
-      const signal = loadAbort.signal;
-
-      const ctx = await engine.ensureGraph();
-      if (ctx.state === "suspended") void ctx.resume();
-
-      let buffers = await engine.decodeFull(song, signal, {
-        onTrackDone: (done, total) =>
-          setBuffered(clamp(0.1 + (0.9 * done) / Math.max(1, total), 0, 0.99)),
+      await engine.playSong(song, {
+        isStale: () => currentRef.current?.slug !== song.slug,
+        onPrefetch: (s) => prefetchAdjacentSongs(s),
       });
-      if (signal.aborted || currentRef.current?.slug !== song.slug) return;
-
-      // Joined an aborted background prefetch -> decode once more directly
-      if (!buffers || (buffers.stems.size === 0 && !buffers.mix)) {
-        buffers = await engine.decodeFull(song, signal);
-        if (signal.aborted || currentRef.current?.slug !== song.slug) return;
-      }
-
-      if (!buffers || (buffers.stems.size === 0 && !buffers.mix)) {
-        // Nothing decodable — never enter a fake "playing" silence state
-        setBuffering(false);
-        setBuffered(0);
-        engine.playing = false;
-        setPlaying(false);
-        reportError("Audio files for this song could not be decoded");
-        return;
-      }
-
-      engine.load(buffers);
-      setBuffered(1);
-      setBuffering(false);
-
-      engine.startFullAt(0, buffers);
-      engine.playing = true;
-      setPlaying(true);
-
-      setTimeout(() => prefetchAdjacentSongs(song), 800);
     },
-    [engine, play, prefetchAdjacentSongs, reportError, yieldToPaint],
+    [engine, play, prefetchAdjacentSongs],
   );
 
   const playSongRef = useRef(playSong);

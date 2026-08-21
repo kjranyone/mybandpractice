@@ -130,6 +130,8 @@ export class PlaybackEngine {
   muted = false;
   loop: LoopRegion | null = null;
   loopEnabled = false;
+  /** Last emitted buffered fraction (0–1); engine-owned truth. */
+  bufferedFraction = 0;
 
   constructor(events: EngineEvents) {
     this.events = events;
@@ -140,9 +142,10 @@ export class PlaybackEngine {
   private getCtx(): AudioContext {
     if (!this.ctx) {
       const AC: typeof AudioContext =
-        window.AudioContext ??
-        (window as unknown as { webkitAudioContext: typeof AudioContext })
-          .webkitAudioContext;
+        globalThis.AudioContext ??
+        (globalThis as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext ??
+        (window as unknown as { AudioContext: typeof AudioContext }).AudioContext;
       // 48 kHz matches the device output and the default Opus chunks, so the
       // primary decode path never resamples (44.1 kHz sources resample once
       // at decode — measured acceptable on the rare full-file fallback).
@@ -570,12 +573,12 @@ export class PlaybackEngine {
     this.pausedTime = safeOffset;
 
     const firstBuf = cs.chunks.get(cs.stems[0])?.[i0] ?? null;
-    if (!firstBuf) this.events.onBufferingChange(true);
+    if (!firstBuf) this.setBuffering(true);
     const ok = await this.ensureChunkRow(cs, i0);
     if (seq !== this.startSeq || this.playing !== wantPlaying || this.loaded !== wantLoaded) {
       return "superseded"; // a newer start / pause / song switch owns state
     }
-    this.events.onBufferingChange(false);
+    this.setBuffering(false);
     if (!ok) return "failed";
 
     const g = this.graph;
@@ -703,8 +706,8 @@ export class PlaybackEngine {
       void this.startChunkedAt(offsetSec, loaded).then((res) => {
         if (res === "failed") {
           this.setPlaying(false);
-          this.events.onBufferingChange(false);
-          this.events.onBufferedChange(0);
+          this.setBuffering(false);
+          this.setBuffered(0);
           this.sched = null;
           this.events.onError("Could not decode audio at that position");
         }
@@ -719,6 +722,130 @@ export class PlaybackEngine {
     if (this.playing === v) return;
     this.playing = v;
     this.events.onPlayingChange(v);
+  }
+
+  private setBuffered(fraction: number) {
+    this.bufferedFraction = fraction;
+    this.events.onBufferedChange(fraction);
+  }
+
+  private setBuffering(v: boolean) {
+    this.events.onBufferingChange(v);
+  }
+
+  /** Paint yield so buffering spinners render before heavy decode starts. */
+  private static yieldToPaint(): Promise<void> {
+    return new Promise<void>((r) => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          setTimeout(r, 30);
+        }),
+      );
+    });
+  }
+
+  /**
+   * Full song-switch orchestration: reset clock, resolve audio in
+   * cache -> chunked -> full-decode order and start playback. Emits
+   * buffering/buffered/playing/error events as it goes.
+   *
+   * Returns "ok", "cancelled" (another song/seek took over mid-load) or
+   * "failed" (nothing decodable). The hook only decides playlist policy.
+   */
+  async playSong(
+    song: SongSummary,
+    hooks?: {
+      onSongReset?(song: SongSummary): void;
+      onPrefetch?(song: SongSummary): void;
+      isStale?(): boolean;
+    },
+  ): Promise<"ok" | "cancelled" | "failed"> {
+    this.stopSources(8);
+    this.setPlaying(false);
+    this.resetClock(0);
+    this.duration = song.durationSeconds || 0;
+    this.events.onDurationChange(this.duration);
+    hooks?.onSongReset?.(song);
+
+    // 1. Full-buffer memory cache (0ms instant start)
+    const cached = this.fullCache.get(song.slug);
+    if (cached) {
+      this.load(cached);
+      this.startFullAt(0, cached);
+      this.setPlaying(true);
+      this.setBuffered(1);
+      this.setBuffering(false);
+      setTimeout(() => hooks?.onPrefetch?.(song), 1000);
+      return "ok";
+    }
+
+    // 1.5 Chunked fast path: decode only the first ~30s row, start playing,
+    // then stream the rest just-in-time.
+    const chunked = this.getOrCreateChunked(song);
+    if (chunked) {
+      this.load(chunked);
+      this.setBuffering(true);
+      this.setBuffered(0.05);
+      await PlaybackEngine.yieldToPaint();
+
+      const ctx = await this.ensureGraph();
+      if (ctx.state === "suspended") void ctx.resume();
+
+      const res = await this.startChunkedAt(0, chunked);
+      if (res === "superseded") return "cancelled";
+      if (res === "failed") {
+        if (hooks?.isStale?.()) return "cancelled";
+        this.setBuffering(false);
+        this.setBuffered(0);
+        this.setPlaying(false);
+        this.events.onError("Could not decode this song's audio");
+        return "failed";
+      }
+      this.setPlaying(true);
+      this.setBuffered(1);
+      this.setBuffering(false);
+      setTimeout(() => hooks?.onPrefetch?.(song), 800);
+      return "ok";
+    }
+
+    // 2. Full decode path — global buffering UI shows instantly, mixer gains
+    //    are guaranteed before the first sample.
+    this.setBuffering(true);
+    this.setBuffered(0.05);
+    await PlaybackEngine.yieldToPaint();
+
+    const ctx = await this.ensureGraph();
+    if (ctx.state === "suspended") void ctx.resume();
+
+    let buffers = await this.decodeFull(song, undefined, {
+      onTrackDone: (done, total) =>
+        this.setBuffered(clamp(0.1 + (0.9 * done) / Math.max(1, total), 0, 0.99)),
+    });
+    if (hooks?.isStale?.()) return "cancelled";
+
+    // Joined an aborted background prefetch -> decode once more directly
+    if (!buffers || (buffers.stems.size === 0 && !buffers.mix)) {
+      buffers = await this.decodeFull(song);
+      if (hooks?.isStale?.()) return "cancelled";
+    }
+
+    if (!buffers || (buffers.stems.size === 0 && !buffers.mix)) {
+      // Nothing decodable — never enter a fake "playing" silence state
+      this.setBuffering(false);
+      this.setBuffered(0);
+      this.setPlaying(false);
+      this.events.onError("Audio files for this song could not be decoded");
+      return "failed";
+    }
+
+    this.load(buffers);
+    this.setBuffered(1);
+    this.setBuffering(false);
+    this.startFullAt(0, buffers);
+    this.setPlaying(true);
+
+    setTimeout(() => hooks?.onPrefetch?.(song), 800);
+    return "ok";
   }
 
   pause() {

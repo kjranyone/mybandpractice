@@ -3,29 +3,9 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Connect, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { parseChunkManifest } from "./src/audio/chunkMath";
-import type { SongSummary } from "./src/types";
+import type { SongMeta, SongSummary } from "./src/types";
 
-export type { SongSummary };
-
-export type SongMeta = {
-  slug: string;
-  title: string;
-  artist: string;
-  source_url?: string;
-  yt_duration_seconds?: number;
-  audio?: {
-    file?: string;
-    output_duration_seconds?: number;
-  };
-  lyrics?: {
-    source_url?: string;
-    matched_artist?: string;
-    lyricist?: string;
-    composer?: string;
-    stanza_count?: number;
-    line_count?: number;
-  };
-};
+export type { SongMeta, SongSummary };
 
 function listSongs(songsDir: string): SongSummary[] {
   if (!fs.existsSync(songsDir)) return [];
