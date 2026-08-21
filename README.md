@@ -97,6 +97,11 @@ mybandpractice/
 - **ffmpeg** & **ffprobe** (システム PATH に追加されていること)
 - **yt-dlp** (システム PATH に追加されていること)
 
+## 🖥️ 対応プラットフォーム
+
+- **動作確認済み**: Windows (Chrome/Edge), Android (Capacitor ビルド)
+- **未対応・未検証**: iOS / macOS — Capacitor の iOS 足場 (`npx cap add ios`) から整備が必要です。Web Audio は AudioWorklet / DynamicsCompressor など Safari 互換 API のみを使用しているため、検証報告や PR を歓迎します (コントリビュートの際はスクリーンショット・機種・iOS/Safari バージョンの添付にご協力ください)。
+
 ---
 
 ## 📦 セットアップ & 使い方
