@@ -1085,35 +1085,14 @@
   z-index: 0;
 }
 
-.waveform-bars {
+/* Single-canvas waveform (replaces the per-bar span layers) */
+.waveform-canvas {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  padding: 0 2px;
+  width: 100%;
+  height: 100%;
   z-index: 1;
   pointer-events: none;
-}
-
-.wf-bar {
-  flex: 1 1 0;
-  min-width: 1px;
-  border-radius: 1px;
-  background: #3a414f;
-  align-self: center;
-}
-
-.wf-bar.is-played {
-  background: var(--sc);
-}
-
-.wf-bar.in-loop:not(.is-played) {
-  background: #6b5a3a;
-}
-
-.wf-bar.in-loop.is-played {
-  background: #ff7a33;
 }
 
 .waveform-loop {
@@ -1202,18 +1181,21 @@
   position: absolute;
   top: 0;
   bottom: 0;
+  left: 0;
   width: 2px;
   margin-left: -1px;
   background: #fff;
   box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
   z-index: 4;
   pointer-events: none;
+  will-change: transform;
 }
 
 .waveform-hover-line {
   position: absolute;
   top: 0;
   bottom: 0;
+  left: 0;
   width: 1px;
   margin-left: -0.5px;
   background: rgba(255, 255, 255, 0.35);
@@ -4074,5 +4056,45 @@
   border: 1px solid var(--border);
   color: var(--accent);
   font-size: 0.85rem;
+}
+
+/* —— Native (Capacitor) overrides ——
+   backdrop-filter forces per-frame saveLayers through the WebView functor
+   inside hwui's RenderThread; on some vendor Skia builds this corrupts the
+   clip stack and crashes with SIGSEGV. Replace the frosted look with more
+   opaque backgrounds on native builds. */
+.native .sidebar {
+  background: rgba(12, 14, 18, 0.94);
+  backdrop-filter: none;
+}
+
+.native .modal-overlay {
+  background: rgba(4, 6, 10, 0.82);
+  backdrop-filter: none;
+}
+
+.native .player.practice-player {
+  backdrop-filter: none;
+}
+
+.native .waveform-buffering-overlay {
+  background: rgba(8, 10, 14, 0.82);
+  backdrop-filter: none;
+}
+
+.native .sidebar-backdrop {
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: none;
+}
+
+.native .chord-sheet-toolbar {
+  background: #10131a;
+  backdrop-filter: none;
+}
+
+/* Playhead glow forces a blurred repaint of the waveform layer on every
+   tick; a flat 2px line is compositor-cheap on native. */
+.native .waveform-playhead {
+  box-shadow: none;
 }
 

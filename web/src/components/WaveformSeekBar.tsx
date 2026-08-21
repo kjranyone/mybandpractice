@@ -51,6 +51,12 @@ const DRAG_THRESHOLD_PX = 4;
 const LONG_PRESS_MS = 2000;
 const FLAG_DRAG_THRESHOLD_PX = 3;
 
+// Waveform palette fallbacks (real values resolve from CSS vars at draw time)
+const WF_BAR_BASE = "#3a414f";
+const WF_BAR_LOOP = "#6b5a3a";
+const WF_BAR_LOOP_PLAYED = "#ff7a33";
+const WF_SC_FALLBACK = "#ff5500";
+
 export function WaveformSeekBar({
   audioUrl,
   slug,
@@ -71,7 +77,9 @@ export function WaveformSeekBar({
   rightSlot,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [barCount, setBarCount] = useState(220);
+  const [size, setSize] = useState({ w: 0, h: 0 });
   const [peaks, setPeaks] = useState<number[]>(() =>
     syntheticPeaks(slug ?? "idle", 220),
   );
@@ -129,6 +137,11 @@ export function WaveformSeekBar({
         clamp(el.clientWidth / BAR_PITCH_PX, MIN_BARS, MAX_BARS),
       );
       setBarCount((prev) => (prev === n ? prev : n));
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      setSize((prev) =>
+        prev.w === w && prev.h === h ? prev : { w, h },
+      );
     };
     update();
     const ro = new ResizeObserver(update);
@@ -167,6 +180,52 @@ export function WaveformSeekBar({
   const progress = duration > 0 ? currentTime / duration : 0;
   const loopStartR = loop && duration > 0 ? loop.start / duration : 0;
   const loopEndR = loop && duration > 0 ? loop.end / duration : 0;
+  const hasLoop = loop != null && duration > 0;
+
+  // Paint the waveform into a single canvas: one texture upload replaces
+  // hundreds of DOM spans (and the per-tick restyling that crashed the
+  // Android WebView / hwui render stack).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || size.w === 0 || size.h === 0) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const pxW = Math.round(size.w * dpr);
+    const pxH = Math.round(size.h * dpr);
+    if (canvas.width !== pxW) canvas.width = pxW;
+    if (canvas.height !== pxH) canvas.height = pxH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size.w, size.h);
+
+    const n = peaks.length;
+    if (n === 0) return;
+
+    const rootStyles = getComputedStyle(document.documentElement);
+    const playedColor =
+      rootStyles.getPropertyValue("--sc").trim() || WF_SC_FALLBACK;
+
+    const padX = 2; // matches the old .waveform-bars padding
+    const pitch = (size.w - padX * 2) / n;
+    const barW = Math.max(1, pitch - 1); // 1px gap between bars
+    const midY = size.h / 2;
+
+    for (let i = 0; i < n; i++) {
+      const p = peaks[i];
+      const r = (i + 0.5) / n;
+      const played = r <= progress;
+      const inLoop = hasLoop && r >= loopStartR && r <= loopEndR;
+      ctx.fillStyle = played
+        ? inLoop
+          ? WF_BAR_LOOP_PLAYED
+          : playedColor
+        : inLoop
+          ? WF_BAR_LOOP
+          : WF_BAR_BASE;
+      const barH = Math.max(size.h * 0.08, p * size.h);
+      ctx.fillRect(padX + i * pitch, midY - barH / 2, barW, barH);
+    }
+  }, [peaks, progress, loopStartR, loopEndR, hasLoop, size]);
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (markerEditor) setMarkerEditor(null);
@@ -467,28 +526,9 @@ export function WaveformSeekBar({
           style={{ width: `${buffered * 100}%` }}
         />
 
-        {/* Bars */}
-        <div className="waveform-bars" aria-hidden>
-          {peaks.map((p, i) => {
-            const r = (i + 0.5) / peaks.length;
-            const played = r <= progress;
-            const inLoop =
-              loop && r >= loopStartR && r <= loopEndR;
-            return (
-              <span
-                key={i}
-                className={[
-                  "wf-bar",
-                  played ? "is-played" : "",
-                  inLoop ? "in-loop" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                style={{ height: `${Math.max(8, p * 100)}%` }}
-              />
-            );
-          })}
-        </div>
+        {/* Waveform: single canvas — one texture instead of hundreds of
+            restyled span nodes on every playback tick */}
+        <canvas ref={canvasRef} className="waveform-canvas" aria-hidden />
 
         {/* Loop region */}
         {loop && duration > 0 && (
@@ -549,17 +589,17 @@ export function WaveformSeekBar({
             </div>
           ))}
 
-        {/* Playhead */}
+        {/* Playhead — transform only (no layout thrash at 10Hz ticks) */}
         <div
           className="waveform-playhead"
-          style={{ left: `${progress * 100}%` }}
+          style={{ transform: `translateX(${progress * size.w}px)` }}
         />
 
         {/* Hover line */}
         {hoverRatio != null && !disabled && (
           <div
             className="waveform-hover-line"
-            style={{ left: `${hoverRatio * 100}%` }}
+            style={{ transform: `translateX(${hoverRatio * size.w}px)` }}
           />
         )}
 
