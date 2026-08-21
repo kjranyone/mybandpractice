@@ -27,17 +27,18 @@ jobs:
       - run: npm run build
 
   bin:
-    name: bin (ruff + manifest smoke)
+    name: bin (ruff + syntax smoke)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/ruff-action@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
       - name: Lint pipeline scripts
         run: |
           ruff check bin/mbp.py bin/make-stem-chunks.py bin/convert-audio.py bin/separate-stems.py
           ruff check bin/analyze-chords.py --select E9,F821,F811,F401,I001
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Syntax-check all bin scripts
         run: python -c "import ast,glob; [ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('bin/*.py')]; print('syntax OK')"
