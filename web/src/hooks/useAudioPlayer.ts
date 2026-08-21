@@ -104,12 +104,13 @@ type DecodedSongBuffers = {
   duration: number;
 };
 
-/** Sample-exact pre-split chunks (bin/make-stem-chunks.py): chunk i of every
+/** Sample-aligned pre-split chunks (bin/make-stem-chunks.py): chunk i of every
  * stem starts at exactly i * chunkSeconds in song time. */
 type ChunkedSong = {
   kind: "chunked";
   slug: string;
   chunkSeconds: number;
+  ext: string;
   stems: string[];
   counts: Record<string, number>;
   urlBases: Record<string, string>;
@@ -485,6 +486,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
       kind: "chunked",
       slug: song.slug,
       chunkSeconds: song.chunks.chunkSeconds,
+      ext: song.chunks.ext ?? "flac",
       stems,
       counts: Object.fromEntries(
         stems.map((s) => [s, song.chunks!.stems[s].count]),
@@ -517,7 +519,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
 
       const promise = (async (): Promise<AudioBuffer | null> => {
         const ctx = audioCtxRef.current ?? getAudioContext();
-        const url = `${cs.urlBases[stem]}/${idx.toString().padStart(5, "0")}.flac`;
+        const url = `${cs.urlBases[stem]}/${idx.toString().padStart(5, "0")}.${cs.ext}`;
         try {
           const t0 = performance.now();
           const res = await fetch(url);
@@ -528,7 +530,7 @@ export function useAudioPlayer(songs: SongSummary[]) {
           const ab = await res.arrayBuffer();
           const buf = await ctx.decodeAudioData(ab);
           console.log(
-            `[AudioPlayer] chunk ${cs.slug}/${stem}/${idx}: ${((performance.now() - t0) | 0)}ms ${buf.duration.toFixed(1)}s`,
+            `[AudioPlayer] chunk ${cs.slug}/${stem}/${idx}: ${((performance.now() - t0) | 0)}ms ${buf.duration.toFixed(3)}s`,
           );
           const target = cs.chunks.get(stem);
           if (target) target[idx] = buf;
@@ -614,7 +616,11 @@ export function useAudioPlayer(songs: SongSummary[]) {
       startOffsetRef.current = safeOffset;
 
       const leadBuf = cs.chunks.get(cs.stems[0])![i0]!;
-      const rowDur = leadBuf.duration;
+      // Effective row duration: lossy codecs may decode with end padding
+      // (e.g. Opus 20ms frames); clamp to the nominal boundary and hard-stop
+      // sources there so scheduled rows stay sample-aligned.
+      const rowDur = Math.min(leadBuf.duration, CD + 0.001);
+      const rowWallDur = Math.max(0.05, (rowDur - intra) / rate);
 
       for (const stemName of cs.stems) {
         const buf = cs.chunks.get(stemName)![i0]!;
@@ -636,12 +642,13 @@ export function useAudioPlayer(songs: SongSummary[]) {
 
         src.connect(stemGain);
         src.start(now, Math.min(intra, Math.max(0, buf.duration - 0.01)));
+        src.stop(now + rowWallDur);
         activeSourcesRef.current.set(`${stemName}#${i0}`, src);
       }
 
       chunkSchedRef.current = {
         nextIdx: i0 + 1,
-        nextWallTime: now + Math.max(0.05, (rowDur - intra) / rate),
+        nextWallTime: now + rowWallDur,
         kick: null,
       };
       return "started";
@@ -677,6 +684,9 @@ export function useAudioPlayer(songs: SongSummary[]) {
       const leadBuf = cs.chunks.get(cs.stems[0])?.[idx];
       if (!g || !leadBuf) return; // not decoded yet — potential small gap
 
+      // Clamp to the nominal chunk boundary (lossy padding defense) and
+      // advance the schedule by the same effective duration.
+      const rowDur = Math.min(leadBuf.duration, cs.chunkSeconds + 0.001);
       const when = Math.max(sched.nextWallTime, ctx.currentTime + 0.005);
       for (const stemName of cs.stems) {
         const buf = cs.chunks.get(stemName)![idx]!;
@@ -686,9 +696,10 @@ export function useAudioPlayer(songs: SongSummary[]) {
         const stemGain = g.stemGains.get(stemName)!;
         src.connect(stemGain);
         src.start(when, 0);
+        src.stop(when + rowDur / rate);
         activeSourcesRef.current.set(`${stemName}#${idx}`, src);
       }
-      sched.nextWallTime = when + leadBuf.duration / rate;
+      sched.nextWallTime = when + rowDur / rate;
       sched.nextIdx = idx + 1;
 
       // Evict far-behind chunks to bound memory (~current + next row kept)

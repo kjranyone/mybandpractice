@@ -185,7 +185,7 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
       /* no stems dir */
     }
 
-    // Pre-split sample-exact chunks (bin/make-stem-chunks.py) enable instant
+    // Pre-split sample-aligned chunks (bin/make-stem-chunks.py) enable instant
     // playback: only the chunk at the playhead is decoded up front.
     let chunks: SongSummary["chunks"];
     if (stems && baseUri) {
@@ -194,8 +194,14 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
         if (manifestRaw) {
           const manifest = JSON.parse(manifestRaw) as {
             chunkSeconds?: number;
+            ext?: string;
             stems?: Record<string, { count?: number }>;
           };
+          const ext =
+            typeof manifest.ext === "string" &&
+            ["flac", "opus", "ogg"].includes(manifest.ext)
+              ? manifest.ext
+              : "flac";
           if (
             typeof manifest.chunkSeconds === "number" &&
             manifest.chunkSeconds >= 5 &&
@@ -213,7 +219,7 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
               }
             }
             if (Object.keys(chunkStems).length === stems.length) {
-              chunks = { chunkSeconds: manifest.chunkSeconds, stems: chunkStems };
+              chunks = { chunkSeconds: manifest.chunkSeconds, ext, stems: chunkStems };
             }
           }
         }

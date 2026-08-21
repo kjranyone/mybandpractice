@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Cut stem audio into sample-exact FLAC chunks for instant on-device playback.
+"""Cut stem audio into sample-aligned chunks for instant on-device playback.
 
 Layout produced per song:
-  songs/<slug>/stems/chunks/<stem>/00000.flac, 00001.flac, ...
+  songs/<slug>/stems/chunks/<stem>/00000.<ext>, 00001.<ext>, ...
   songs/<slug>/stems/chunks/chunks.json
 
 Each chunk holds exactly CHUNK_SECONDS of audio (the last chunk may be
@@ -11,12 +11,21 @@ sample ranges, so chunk i of all stems starts at exactly i * CHUNK_SECONDS
 in song time — the runtime sequencer (useAudioPlayer.ts) relies on this
 alignment for gapless scheduling.
 
-chunks.json stores a fingerprint (name/size/mtime) of each source stem; a
-changed source (e.g. after re-separation) invalidates and rebuilds the
-song's chunks automatically. Run with --force to rebuild unconditionally.
+Codecs (--codec):
+  flac   Lossless, zero encoder delay: decoded chunk length is exactly the
+         cut length (safest boundaries, largest files).
+  opus   ~4x smaller than flac. Opus is 48 kHz only (input is resampled at
+         cut time) and uses 20 ms CELT frames: the decoder must trim
+         pre-skip/padding for sample alignment. Verified on-device; the
+         runtime also hard-trims each source at the nominal boundary.
+  vorbis 44.1 kHz native Ogg Vorbis fallback if Opus misbehaves.
+
+chunks.json stores a fingerprint (name/size/mtime) of each source stem and
+the codec; a changed source or codec invalidates and rebuilds the song's
+chunks automatically. Run with --force to rebuild unconditionally.
 
 Usage:
-  python bin/make-stem-chunks.py [--seconds 30] [--force] [slug ...]
+  python bin/make-stem-chunks.py [--seconds 30] [--codec flac] [--force] [slug ...]
 """
 
 from __future__ import annotations
@@ -39,7 +48,26 @@ from mbp import (
 
 MANIFEST_NAME = "chunks.json"
 # Bump when the cutting algorithm changes so existing manifests rebuild.
-ALGORITHM_VERSION = 2
+ALGORITHM_VERSION = 3
+
+# codec -> {ext, ffmpeg encoder args (with {bitrate} placeholder), forced rate}
+CODECS: dict[str, dict] = {
+    "flac": {
+        "ext": "flac",
+        "args": ["-c:a", "flac", "-compression_level", "4"],
+        "rate": None,
+    },
+    "opus": {
+        "ext": "opus",
+        "args": ["-c:a", "libopus", "-b:a", "{bitrate}", "-vbr", "on"],
+        "rate": 48000,
+    },
+    "vorbis": {
+        "ext": "ogg",
+        "args": ["-c:a", "libvorbis", "-b:a", "{bitrate}"],
+        "rate": None,
+    },
+}
 
 
 def decode_raw_pcm(src: Path) -> tuple[bytes, int, int]:
@@ -56,10 +84,15 @@ def decode_raw_pcm(src: Path) -> tuple[bytes, int, int]:
 
 
 def make_chunks_for_stem(
-    src: Path, out_dir: Path, chunk_seconds: float
+    src: Path, out_dir: Path, chunk_seconds: float, codec: str, bitrate: str
 ) -> int:
-    """Cut one stem into FLAC chunks; returns the chunk count."""
+    """Cut one stem into codec chunks; returns the chunk count."""
+    spec = CODECS[codec]
+    ext = spec["ext"]
     raw, sample_rate, channels = decode_raw_pcm(src)
+    encode_rate = spec["rate"]
+    rate_args = ["-ar", str(encode_rate)] if encode_rate else []
+    enc_args = [a.replace("{bitrate}", bitrate) for a in spec["args"]]
 
     bytes_per_frame = 2 * channels
     total_frames = len(raw) // bytes_per_frame
@@ -72,21 +105,20 @@ def make_chunks_for_stem(
     for i in range(count):
         start = i * frames_per_chunk * bytes_per_frame
         end = min(total_frames, (i + 1) * frames_per_chunk) * bytes_per_frame
-        out_path = out_dir / f"{i:05d}.flac"
+        out_path = out_dir / f"{i:05d}.{ext}"
         ffmpeg(
             "-f", "s16le", "-ar", str(sample_rate), "-ac", str(channels),
-            "-i", "pipe:0", "-c:a", "flac", "-compression_level", "4",
+            "-i", "pipe:0", *rate_args, *enc_args,
             str(out_path),
             stdin_data=raw[start:end],
         )
 
-    # Drop stale chunks beyond the current count (e.g. shorter re-separation)
-    for old in out_dir.glob("*.flac"):
-        try:
-            if int(old.stem) >= count:
-                old.unlink()
-        except ValueError:
-            old.unlink()
+    # Drop stale chunks: wrong extension, or index >= count (shorter re-sep)
+    for old in out_dir.iterdir():
+        if not old.is_file() or not old.stem.isdigit():
+            continue
+        if old.suffix.lstrip(".") != ext or int(old.stem) >= count:
+            old.unlink(missing_ok=True)
     return count
 
 
@@ -101,7 +133,7 @@ def clean_orphan_chunk_dirs(chunks_root: Path, valid_stems: set[str]) -> None:
 
 
 def process_song(
-    song_dir: Path, chunk_seconds: float, force: bool
+    song_dir: Path, chunk_seconds: float, codec: str, bitrate: str, force: bool
 ) -> bool:
     stems_dir = song_dir / "stems"
     sources = find_stem_sources(stems_dir)
@@ -121,16 +153,18 @@ def process_song(
             manifest
             and manifest.get("algorithm") == ALGORITHM_VERSION
             and manifest.get("chunkSeconds") == chunk_seconds
+            and manifest.get("codec") == codec
             and manifest.get("sources") == fingerprints
         ):
             return False  # up to date
 
-    print(f"[chunks] {song_dir.name} ({len(sources)} stems)...")
+    print(f"[chunks] {song_dir.name} ({len(sources)} stems, {codec})...")
     counts: dict[str, int] = {}
     with ThreadPoolExecutor(max_workers=min(4, len(sources))) as ex:
         futures = {
             name: ex.submit(
-                make_chunks_for_stem, src, chunks_root / name, chunk_seconds
+                make_chunks_for_stem,
+                src, chunks_root / name, chunk_seconds, codec, bitrate,
             )
             for name, src in sources.items()
         }
@@ -149,6 +183,8 @@ def process_song(
         json.dumps(
             {
                 "algorithm": ALGORITHM_VERSION,
+                "codec": codec,
+                "ext": CODECS[codec]["ext"],
                 "chunkSeconds": chunk_seconds,
                 "sampleRate": int(stream["sample_rate"]),
                 "channels": int(stream["channels"]),
@@ -171,6 +207,14 @@ def main() -> int:
         "--seconds", type=float, default=30.0,
         help="chunk length in seconds (default 30)",
     )
+    ap.add_argument(
+        "--codec", choices=list(CODECS), default="opus",
+        help="chunk codec (default opus; verified sample-aligned on-device)",
+    )
+    ap.add_argument(
+        "--bitrate", default="128k",
+        help="bitrate for lossy codecs (default 128k)",
+    )
     ap.add_argument("--force", action="store_true", help="rebuild existing chunks")
     ap.add_argument("slugs", nargs="*", help="limit to specific song slugs")
     args = ap.parse_args()
@@ -183,7 +227,7 @@ def main() -> int:
     for song_dir in iter_song_dirs():
         if args.slugs and song_dir.name not in args.slugs:
             continue
-        if process_song(song_dir, args.seconds, args.force):
+        if process_song(song_dir, args.seconds, args.codec, args.bitrate, args.force):
             changed += 1
     print(f"done: {changed} song(s) chunked")
     return 0
