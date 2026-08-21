@@ -35,6 +35,16 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mbp import (
+    DEFAULT_TARGET_I,
+    DEFAULT_TARGET_LRA,
+    DEFAULT_TARGET_TP,
+    loudnorm_apply_filter,
+    loudnorm_measure_filter,
+    parse_loudnorm_json,
+)
+
 ROOT = Path(__file__).resolve().parent.parent
 SONGS_DIR = ROOT / "songs"
 
@@ -42,9 +52,8 @@ SONGS_DIR = ROOT / "songs"
 # Japanese on Windows (PYTHONUTF8 covers yt-dlp's Python stdout).
 UTF8_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
-DEFAULT_TARGET_I = -16.0  # LUFS, EBU R128 streaming target
-DEFAULT_TARGET_TP = -1.5  # dBFS true peak
-DEFAULT_TARGET_LRA = 11.0  # loudness range
+# Loudness targets come from mbp (shared with convert-audio --normalize) so
+# every ingest path lands at the same integrated loudness.
 DEFAULT_SILENCE_DB = -50.0  # peak threshold for head/tail silence
 DEFAULT_KEEP_SILENCE = 0.05  # seconds retained to avoid clicks
 DEFAULT_BITRATE = "192k"
@@ -260,39 +269,6 @@ def silence_filter(threshold_db: float, keep_silence_sec: float) -> str:
         f"start_threshold={threshold_db}dB:detection=peak"
     )
     return f"{seg},areverse,{seg},areverse"
-
-
-def loudnorm_measure_filter(
-    target_i: float, target_tp: float, target_lra: float
-) -> str:
-    return f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=json"
-
-
-def loudnorm_apply_filter(
-    measured: dict, target_i: float, target_tp: float, target_lra: float
-) -> str:
-    return (
-        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:"
-        f"measured_I={measured['input_i']}:"
-        f"measured_TP={measured['input_tp']}:"
-        f"measured_LRA={measured['input_lra']}:"
-        f"measured_thresh={measured['input_thresh']}:"
-        f"offset={measured['target_offset']}:"
-        f"linear=true"
-    )
-
-
-LOUDNORM_JSON_RE = re.compile(r"\{\s*\"input_i\".*?\}", re.DOTALL)
-
-
-def parse_loudnorm_json(stderr: str) -> dict:
-    m = LOUDNORM_JSON_RE.search(stderr)
-    if not m:
-        raise RuntimeError("loudnorm JSON not found in ffmpeg output:\n" + stderr)
-    raw = json.loads(m.group(0))
-    out = {k: float(v) for k, v in raw.items() if k != "normalization_type"}
-    out["normalization_type"] = raw.get("normalization_type", "linear")
-    return out
 
 
 # --------------------------------------------------------------------------- #

@@ -1592,6 +1592,10 @@
   transition: width 0.15s ease-out;
 }
 
+.mx-vol-fill.is-boost {
+  background: var(--sc);
+}
+
 .mx-vol-text {
   position: relative;
   z-index: 1;
@@ -1749,6 +1753,35 @@
   bottom: 3px;
   border-radius: 2px;
   background: linear-gradient(180deg, var(--loop), rgba(251, 191, 36, 0.35));
+}
+
+.mx-fader-fill.is-boost {
+  background: linear-gradient(180deg, var(--sc), rgba(255, 85, 0, 0.35));
+}
+
+/* +6 dB boost zone (top 20% of travel) and the 100% unity mark */
+.mx-fader-boost-zone {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  top: 1px;
+  height: 20%;
+  border-radius: 3px 3px 0 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 85, 0, 0.14) 0 3px,
+    transparent 3px 6px
+  );
+  pointer-events: none;
+}
+
+.mx-fader-unity {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 80%;
+  border-top: 1px dashed rgba(255, 255, 255, 0.38);
+  pointer-events: none;
 }
 
 .mx-fader-thumb {

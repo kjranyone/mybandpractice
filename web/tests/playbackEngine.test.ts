@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlaybackEngine } from "../src/audio/PlaybackEngine";
+import { MAX_GAIN } from "../src/audio/gain";
 
 // ---------------------------------------------------------------- mock Web Audio
 
@@ -25,6 +26,11 @@ class FakeNode {
   gain = fakeParam();
   delayTime = fakeParam();
   playbackRate = fakeParam();
+  threshold = fakeParam();
+  knee = fakeParam();
+  ratio = fakeParam();
+  attack = fakeParam();
+  release = fakeParam();
   buffer: AudioBuffer | null = null;
   onended: (() => void) | null = null;
   connectedTo: FakeNode[] = [];
@@ -56,6 +62,9 @@ class FakeAudioContext {
   }
   createDelay() {
     return new FakeNode() as unknown as DelayNode;
+  }
+  createDynamicsCompressor() {
+    return new FakeNode() as unknown as DynamicsCompressorNode;
   }
   createBufferSource() {
     return new FakeNode() as unknown as AudioBufferSourceNode;
@@ -212,8 +221,10 @@ describe("PlaybackEngine", () => {
     const events = makeEvents();
     const engine = new PlaybackEngine(events);
 
-    engine.setVolume(1.7);
-    expect(engine.volume).toBe(1);
+    engine.setVolume(1.7); // boost past unity is allowed now
+    expect(engine.volume).toBe(1.7);
+    engine.setVolume(99); // clamped to the +6 dB ceiling
+    expect(engine.volume).toBeCloseTo(MAX_GAIN, 10);
     engine.setVolume(-0.5);
     expect(engine.volume).toBe(0);
     engine.setMuted(true);

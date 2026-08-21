@@ -13,14 +13,14 @@
 - **波形シークバー & マーカー機能**: A-Bリピートや特定のセクション（サビ、ギターソロ等）へのマーキング
 - **再生速度調整**: ピッチを維持したままスロー再生 / 高速再生
 - **ピッチシフター**: 再生速度を変えずに ±12 半音のキー変更 (AudioWorklet、0でバイパス)
-- **ミキサー & マイナスワン**: ステム (vocals/drums/bass/other) のオン/オフを Web Audio でライブ合成。ボーカルを消したインスト演奏 (マイナスワン) が可能。ミキサー設定はゲインが再生開始前に確定するため、原音が 1 サンプルも漏れない
+- **ミキサー & マイナスワン**: ステム (vocals/drums/bass/other) のオン/オフを Web Audio でライブ合成。ボーカルを消したインスト演奏 (マイナスワン) が可能。ミキサー設定はゲインが再生開始前に確定するため、原音が 1 サンプルも漏れない。全フェーダーは 100% を超えて最大 +6 dB までブースト可能 (出力直前にセーフティリミッター)
 - **ステータスチップ**: 速度・ステム・音量を常時表示 (音量は割合インジケーター)。クリックでミキサーモーダル
 - **歌詞ディスプレイ**: 曲ごとの歌詞（`lyrics.md`）とメタデータを同時表示
 - **メディアセッション通知**: Android で音楽アプリ風の通知・ロック画面コントロール・バックグラウンド再生
 - **モバイル対応**: React 19 + Vite + Capacitor による PWA / Android アプリ化。狭い画面ではソングリストがフルスクリーンモーダル化
 
 ### 🔊 2. 音声ダウンロード & LUFS ノーマライズ (`bin/yt-to-mp3.py`)
-- **音量平準化**: EBU R128 (`-16 LUFS`, True Peak `-1.5 dB`) に合わせた `ffmpeg` 2-pass 自動ノーマライズ
+- **音量平準化**: EBU R128 (`-14 LUFS` = YouTube 再生基準, True Peak `-1.5 dB`) に合わせた `ffmpeg` 2-pass 自動ノーマライズ。`bin/convert-audio.py --normalize` で既存楽曲 (CD リップ等) も同一基準へ再平準化
 - **無音カット**: 曲前後の無駄な静寂を自動トリミング
 - **メタデータ生成**: ディレクトリ構造 `songs/<slug>/` と `meta.json` を自動作成
 
@@ -167,7 +167,7 @@ uv run python bin/yt-to-mp3.py "https://www.youtube.com/watch?v=XXXXX" -y --stem
 | `-y`, `--yes` | — | 非対話モード: スラグを自動決定し既存ディレクトリを上書き |
 | `--stems` | — | ダウンロード後に `separate-stems.py` を呼び出し 4 ステム分離まで実行 |
 | `--name NAME` | 自動生成 | 曲ディレクトリ名 (slug) を上書き指定 |
-| `--target-i` | `-16.0` | 統合ラウドネス目標 (LUFS, EBU R128) |
+| `--target-i` | `-14.0` | 統合ラウドネス目標 (LUFS, YouTube 再生基準) |
 | `--target-tp` | `-1.5` | トゥルーピーク目標 (dBFS) |
 | `--target-lra` | `11.0` | ラウドネスレンジ目標 |
 | `--silence-db` | `-50.0` | 前後無音判定のしきい値 (dB, peak) |
@@ -334,7 +334,10 @@ main / stems の一括トランスコード (`convert-audio.py`):
 ```powershell
 uv run python bin/convert-audio.py --target all --format ogg   # 全ファイルを Ogg Opus 化
 uv run python bin/convert-audio.py --target stems --format flac # ステムを FLAC に戻す
+uv run python bin/convert-audio.py --target all --normalize     # 全楽曲を -14 LUFS へ再平準化
 ```
+
+`--normalize` は楽曲ごとにミックスを計測し、main と全ステムに**同じゲイン**を適用します (ステムバランスを維持したまま YouTube と同等の音量へ)。実行後は `make-stem-chunks.py` でチャンクを再生成してください。
 
 ---
 

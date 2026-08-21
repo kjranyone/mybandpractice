@@ -21,6 +21,7 @@ import {
   rowWallDuration,
 } from "./chunkMath";
 import { decodeAudioBuffer } from "./decodeAudio";
+import { MAX_GAIN } from "./gain";
 import type { SongSummary } from "../types";
 import { clamp } from "../utils/format";
 
@@ -119,6 +120,7 @@ function smoothChunkEdges(
 
 type GraphNodes = {
   masterGain: GainNode;
+  limiter: DynamicsCompressorNode;
   mixGain: GainNode;
   pitchIn: GainNode;
   bypass: GainNode;
@@ -170,7 +172,7 @@ export class PlaybackEngine {
   playbackRate = 1;
   pitch = 0;
   stemLevels: Record<string, number> = { vocals: 1, drums: 1, bass: 1, other: 1 };
-  volume = 0.85;
+  volume = 1;
   muted = false;
   loop: LoopRegion | null = null;
   loopEnabled = false;
@@ -205,9 +207,19 @@ export class PlaybackEngine {
       this.graphInit = (async () => {
         const ctx = this.getCtx();
 
+        // Safety limiter in front of the hardware output: faders can boost
+        // past unity (MAX_GAIN, stem sums), this catches would-be clipping.
+        const limiter = ctx.createDynamicsCompressor();
+        limiter.threshold.value = -1;
+        limiter.knee.value = 0;
+        limiter.ratio.value = 20;
+        limiter.attack.value = 0.002;
+        limiter.release.value = 0.25;
+        limiter.connect(ctx.destination);
+
         const masterGain = ctx.createGain();
         masterGain.gain.value = this.muted ? 0 : this.volume;
-        masterGain.connect(ctx.destination);
+        masterGain.connect(limiter);
 
         const mixGain = ctx.createGain();
         const pitchIn = ctx.createGain();
@@ -244,6 +256,7 @@ export class PlaybackEngine {
 
         this.graph = {
           masterGain,
+          limiter,
           mixGain,
           pitchIn,
           bypass,
@@ -1103,7 +1116,7 @@ export class PlaybackEngine {
   }
 
   setVolume(v: number) {
-    this.volume = clamp(v, 0, 1);
+    this.volume = clamp(v, 0, MAX_GAIN);
     const g = this.graph;
     const ctx = this.ctx;
     if (g && ctx) {

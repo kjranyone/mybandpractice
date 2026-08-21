@@ -1,7 +1,9 @@
 import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { formatGain, gainToPos, posToGain } from "../audio/gain";
+import { clamp } from "../utils/format";
 
 type Props = {
-  value: number; // 0..1
+  value: number; // linear gain (0..MAX_GAIN)
   label: string;
   disabled?: boolean;
   onChange: (v: number) => void;
@@ -10,16 +12,17 @@ type Props = {
 /** Compact vertical fader for per-stem levels (physical-mixer style). */
 export function StemFader({ value, label, disabled, onChange }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
-  const pct = Math.round(value * 100);
+  const pos = gainToPos(value);
+  const posPct = Math.round(pos * 100);
 
   const setFromClientY = useCallback(
     (clientY: number) => {
       const el = trackRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      // Top = 1, bottom = 0
+      // Top = max boost, bottom = 0
       const ratio = 1 - (clientY - rect.top) / rect.height;
-      onChange(Math.min(1, Math.max(0, ratio)));
+      onChange(posToGain(clamp(ratio, 0, 1)));
     },
     [onChange],
   );
@@ -59,8 +62,8 @@ export function StemFader({ value, label, disabled, onChange }: Props) {
         role="slider"
         aria-label={`${label} level`}
         aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct}
+        aria-valuemax={200}
+        aria-valuenow={Math.round(value * 100)}
         tabIndex={disabled ? -1 : 0}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -73,15 +76,20 @@ export function StemFader({ value, label, disabled, onChange }: Props) {
           if (disabled) return;
           if (e.key === "ArrowUp") {
             e.preventDefault();
-            onChange(Math.min(1, value + 0.02));
+            onChange(posToGain(clamp(pos + 0.02, 0, 1)));
           } else if (e.key === "ArrowDown") {
             e.preventDefault();
-            onChange(Math.max(0, value - 0.02));
+            onChange(posToGain(clamp(pos - 0.02, 0, 1)));
           }
         }}
       >
-        <div className="mx-fader-fill" style={{ height: `${pct}%` }} />
-        <div className="mx-fader-thumb" style={{ bottom: `${pct}%` }} />
+        <div className="mx-fader-boost-zone" aria-hidden />
+        <div className="mx-fader-unity" aria-hidden />
+        <div
+          className={`mx-fader-fill${value > 1 ? " is-boost" : ""}`}
+          style={{ height: `${posPct}%` }}
+        />
+        <div className="mx-fader-thumb" style={{ bottom: `${posPct}%` }} />
         <div className="mx-fader-ticks" aria-hidden>
           <span />
           <span />
@@ -90,7 +98,7 @@ export function StemFader({ value, label, disabled, onChange }: Props) {
         </div>
       </div>
       <span className="mx-fader-label mono">{label}</span>
-      <span className="mx-fader-val mono">{pct}%</span>
+      <span className="mx-fader-val mono">{formatGain(value)}</span>
     </div>
   );
 }
