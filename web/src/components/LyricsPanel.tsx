@@ -16,7 +16,6 @@ type Props = {
   markdown: string | null;
   loading: boolean;
   error: string | null;
-  buffering?: boolean;
   markers: SongMarker[];
   stanzaTags: StanzaTag[];
   currentTime: number;
@@ -40,7 +39,6 @@ export function LyricsPanel({
   markdown,
   loading,
   error,
-  buffering,
   markers,
   stanzaTags,
   currentTime,
@@ -56,21 +54,6 @@ export function LyricsPanel({
     y: number;
   } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-
-  // Center-stage buffering overlay: appears the instant decoding starts and
-  // fades out only once playback is actually about to reach the speakers.
-  const [bufferOverlay, setBufferOverlay] = useState<"hidden" | "shown" | "fading">(
-    "hidden",
-  );
-  useEffect(() => {
-    if (buffering) {
-      setBufferOverlay("shown");
-      return;
-    }
-    setBufferOverlay((prev) => (prev === "shown" ? "fading" : prev));
-    const t = window.setTimeout(() => setBufferOverlay("hidden"), 220);
-    return () => window.clearTimeout(t);
-  }, [buffering]);
 
   useEffect(() => {
     if (!popover) return;
@@ -154,16 +137,6 @@ export function LyricsPanel({
 
   return (
     <main className="main">
-      {bufferOverlay !== "hidden" && (
-        <div
-          className={`main-buffering-overlay${bufferOverlay === "fading" ? " is-fading" : ""}`}
-          role="status"
-          aria-label="Buffering audio"
-        >
-          <span className="main-buffering-spinner" aria-hidden />
-          <span className="main-buffering-text">Buffering</span>
-        </div>
-      )}
       <header className="track-header">
         <div>
           <h1>{song.title}</h1>
