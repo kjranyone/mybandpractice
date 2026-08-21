@@ -81,12 +81,14 @@ export class SyncSender {
               (f) =>
                 f.name.startsWith(`${slug}/stems/`) &&
                 (f.name.toLowerCase().endsWith(".flac") ||
+                  f.name.toLowerCase().endsWith(".ogg") ||
+                  f.name.toLowerCase().endsWith(".opus") ||
                   f.name.toLowerCase().endsWith(".mp3")),
             )
             .map((f) =>
               f.name
                 .slice(`${slug}/stems/`.length)
-                .replace(/\.(flac|mp3)$/i, ""),
+                .replace(/\.(flac|ogg|opus|mp3)$/i, ""),
             ),
         ),
       ].filter(

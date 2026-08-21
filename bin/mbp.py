@@ -15,8 +15,8 @@ SONGS_DIR = ROOT / "songs"
 # stderr decodes reliably regardless of the console codepage.
 UTF8_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
-# Stem source preference: lossless first, then lossy.
-STEM_SOURCE_EXTS = (".flac", ".wav", ".mp3")
+# Stem source preference: lossless first, then lossy (ogg = opus in .ogg).
+STEM_SOURCE_EXTS = (".flac", ".wav", ".ogg", ".opus", ".mp3")
 MAIN_SOURCE_EXTS = (".flac", ".wav", ".mp3", ".m4a", ".ogg", ".opus")
 
 

@@ -20,7 +20,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -131,21 +131,23 @@ def load_model(model_type: str, config_path: Path, ckpt_path: Path, device: str)
     return model, config
 
 
-def encode_mp3(wav_path: Path, mp3_path: Path, bitrate: str) -> None:
+def encode_lossy(wav_path: Path, out_path: Path, codec: str, bitrate: str) -> None:
+    """Encode a temp wav to mp3 or ogg/opus via ffmpeg."""
+    encoder = {"mp3": ["-c:a", "libmp3lame"], "ogg": ["-c:a", "libopus", "-vbr", "on"]}[codec]
     res = subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-nostats", "-y",
-            "-i", str(wav_path),
-            "-c:a", "libmp3lame", "-b:a", bitrate, "-ar", "44100",
-            str(mp3_path),
+            "-i", str(wav_path), *encoder, "-b:a", bitrate, "-ar", "44100",
+            str(out_path),
         ],
         capture_output=True,
         encoding="utf-8",
         errors="replace",
         env=UTF8_ENV,
+        check=False,
     )
     if res.returncode != 0:
-        raise RuntimeError("ffmpeg mp3 encode failed:\n" + res.stderr)
+        raise RuntimeError(f"ffmpeg {codec} encode failed:\n" + res.stderr)
 
 
 def separate_song(
@@ -156,7 +158,7 @@ def separate_song(
     bitrate: str,
     force: bool = False,
     batch_size: int | None = None,
-    output_format: str = "flac",
+    output_format: str = "ogg",
 ) -> bool:
     import gc
 
@@ -190,12 +192,12 @@ def separate_song(
     stems_dir = song_dir / "stems"
     instruments = ["vocals", "drums", "bass", "other"]
     ext = f".{output_format}"
-    if stems_dir.exists() and all(
+    stems_exist = stems_dir.exists() and all(
         (stems_dir / f"{i}{ext}").exists() for i in instruments
-    ):
-        if not force:
-            print(f"  [skip] {song_dir.name}: stems exist (--force to redo)")
-            return False
+    )
+    if stems_exist and not force:
+        print(f"  [skip] {song_dir.name}: stems exist (--force to redo)")
+        return False
 
     print(f"  [separating] {song_dir.name} -> {output_format.upper()}")
     t_start = time.time()
@@ -307,9 +309,9 @@ def separate_song(
         else:
             tmp_wav = stems_dir / f"{instr}.wav"
             sf.write(str(tmp_wav), est.T, sample_rate, subtype="PCM_16")
-            encode_mp3(tmp_wav, stems_dir / f"{instr}.mp3", bitrate)
+            encode_lossy(tmp_wav, stems_dir / f"{instr}.{output_format}", output_format, bitrate)
             tmp_wav.unlink()
-            files[instr] = f"stems/{instr}.mp3"
+            files[instr] = f"stems/{instr}.{output_format}"
 
     meta["stems"] = {
         "models": model_reports,
@@ -320,8 +322,8 @@ def separate_song(
         ),
         "device": device,
         "format": output_format,
-        "bitrate": bitrate if output_format == "mp3" else None,
-        "separated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "bitrate": bitrate if output_format != "flac" else None,
+        "separated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "elapsed_seconds": round(time.time() - t_start, 1),
         "files": files,
     }
@@ -339,9 +341,10 @@ def main() -> None:
     ap.add_argument("--force", action="store_true", help="redo existing stems")
     ap.add_argument(
         "--format",
-        choices=["flac", "mp3"],
-        default="flac",
-        help="output format for separated stems (default: flac for fast decoding)",
+        choices=["flac", "ogg", "mp3"],
+        default="ogg",
+        help="output format for separated stems (default: ogg/opus lossy — "
+        "compact archive; chunks are transcoded independently anyway)",
     )
     ap.add_argument(
         "--single",
@@ -361,7 +364,7 @@ def main() -> None:
         "opt-in) | cpu (default: auto)",
     )
     ap.add_argument("--batch-size", type=int, default=None, help="inference batch size (default: 1 on xpu, 4 otherwise)")
-    ap.add_argument("--bitrate", default="192k", help="mp3 bitrate when using --format mp3 (default 192k)")
+    ap.add_argument("--bitrate", default="192k", help="bitrate for lossy stem formats (default 192k)")
     args = ap.parse_args()
 
     if not MSST_DIR.exists():
@@ -412,7 +415,7 @@ def main() -> None:
                 ok += 1
             else:
                 skip += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — isolate per-song failures in batch runs
             fail += 1
             print(f"  [error] {d.name}: {type(e).__name__}: {e}")
             if device == "xpu":

@@ -31,7 +31,7 @@
 ### 🎚️ 4. ステム分離 (`bin/separate-stems.py`)
 - **AI 音源分離**: vocals / drums / bass / other の 4 ステムに自動分離
 - **アンサンブル標準**: 複数モデル (BS-RoFormer + SCNet) の結果を avg_wave で合成し高品質化
-- **PC マスターは FLAC**: 分離ステムはロスレス FLAC で保存 (品質マスター)。端末向けはチャンク生成時に Opus へ軽量トランスコード
+- **ステムは Ogg Opus 192k**: コンパクトにアーカイブ (ロスレスの `--format flac` も選択可)。端末向けはチャンク生成時に 128k へ再トランスコード
 - **取り込み時実行**: `yt-to-mp3.py --stems` でダウンロードと同時に分離
 - **マルチ GPU 対応**: NVIDIA CUDA / Intel Arc XPU (VRAM ガード付きの明示指定) / AMD ROCm (Linux では `--device cuda` で動作) / CPU
 
@@ -78,15 +78,15 @@ mybandpractice/
 ├── songs/                  # ローカル音源・歌詞ストレージ (Git除外)
 │   └── <song-slug>/
 │       ├── <song-slug>.mp3        # 本体音源 (ノーマライズ済み)
-│       ├── stems/                 # ステムマスター (FLAC, PC アーカイブ用)
-│       │   └── chunks/            # 30 秒 Opus チャンク + chunks.json (端末再生用)
+│       ├── stems/                 # ステムアーカイブ (Ogg Opus 192k)
+│       │   └── chunks/            # 30 秒 Opus 128k チャンク + chunks.json (端末再生用)
 │       ├── chords.json     # コード解析結果 (キー/BPM/小節/ケイデンス)
 │       ├── meta.json
 │       └── lyrics.md
 └── web/                    # React + Vite + TypeScript プレイヤー Web アプリ
 ```
 
-> ストレージ思想: **PC は品質マスター (FLAC ステム)、端末は軽量チャンク (Opus 128k)**。チャンクは同期時に自動生成されるため手動管理は不要です。
+> ストレージ思想: **原曲 mp3 がマスター**。ステムは Ogg Opus アーカイブ、端末は軽量チャンク (Opus 128k)。チャンクは同期時に自動生成されるため手動管理は不要です。
 
 ---
 
@@ -179,7 +179,7 @@ uv run python bin/yt-to-mp3.py "https://www.youtube.com/watch?v=XXXXX" -y --stem
 
 ### 4. ステム分離 (`separate-stems.py`)
 
-[Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) のモデル群で既存曲を vocals / drums / bass / other に分離します。**デフォルト出力はロスレス FLAC** (`songs/<slug>/stems/<stem>.flac`)。端末向けの軽量化はチャンク生成時に Opus へトランスコードされるため、ここの品質が最終再生品質のマスターになります。
+[Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) のモデル群で既存曲を vocals / drums / bass / other に分離します。**デフォルト出力は Ogg Opus 192k** (`songs/<slug>/stems/<stem>.ogg`)。ロスレスが必要な場合は `--format flac` を指定してください (チャンク品質の頭打ち回避や再アーカイブ用)。
 
 #### パイプライン
 
@@ -235,8 +235,8 @@ uv run python bin/separate-stems.py <song-slug> --single bs_roformer_4stem --dev
 | `--type ALGO` | `avg_wave` | アンサンブル合成アルゴリズム (`median_wave`, `min_fft`, `max_fft` 等) |
 | `--device` | 自動 | `cuda` / `xpu` / `cpu`。自動は cuda > cpu のみ (xpu は明示指定が必要)。AMD GPU (ROCm) は Linux では ROCm ビルドの torch が `cuda` API として公開されるため `cuda` 指定で動作 |
 | `--batch-size` | XPU: 1 / 他: 4 | 推論バッチサイズ |
-| `--bitrate` | `192k` | ステム mp3 のビットレート (`--format mp3` 時のみ) |
-| `--format` | `flac` | 出力形式 (`flac` / `mp3`) |
+| `--bitrate` | `192k` | ロスレス以外の形式でのビットレート |
+| `--format` | `ogg` | 出力形式 (`ogg` / `flac` / `mp3`) |
 
 モデル構成は `bin/separate-stems.py` 内の `ENSEMBLE_MODELS` 定数として定義されています (public なチェックポイントのため config 化は不要)。処理時間・realtime factor は `meta.json` の `stems.models` にモデル単位で記録されます。
 
