@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Connect, Plugin, PreviewServer, ViteDevServer } from "vite";
+import { parseChunkManifest } from "./src/audio/chunkMath";
+import type { SongSummary } from "./src/types";
+
+export type { SongSummary };
 
 export type SongMeta = {
   slug: string;
@@ -21,27 +25,6 @@ export type SongMeta = {
     stanza_count?: number;
     line_count?: number;
   };
-};
-
-export type SongSummary = {
-  slug: string;
-  title: string;
-  artist: string;
-  durationSeconds: number | null;
-  audioUrl: string | null;
-  stems?: string[];
-  stemUrls?: Record<string, string>;
-  stemBaseUrl?: string;
-  /** Pre-split sample-aligned stem chunks for instant playback */
-  chunks?: {
-    chunkSeconds: number;
-    ext?: string;
-    stems: Record<string, { count: number; urlBase: string }>;
-  };
-  hasLyrics: boolean;
-  sourceUrl?: string;
-  lyricist?: string;
-  composer?: string;
 };
 
 function listSongs(songsDir: string): SongSummary[] {
@@ -126,38 +109,17 @@ function listSongs(songsDir: string): SongSummary[] {
       const manifestPath = path.join(stemsDir, "chunks", "chunks.json");
       if (fs.existsSync(manifestPath)) {
         try {
-          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
-            chunkSeconds?: number;
-            ext?: string;
-            stems?: Record<string, { count?: number }>;
-          };
-          const ext =
-            typeof manifest.ext === "string" &&
-            ["flac", "opus", "ogg"].includes(manifest.ext)
-              ? manifest.ext
-              : "flac";
-          if (
-            typeof manifest.chunkSeconds === "number" &&
-            manifest.chunkSeconds >= 5 &&
-            manifest.chunkSeconds <= 120 &&
-            manifest.stems
-          ) {
+          const raw = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+          const parsed = parseChunkManifest(raw);
+          if (parsed && stems.every((s) => parsed.stems[s])) {
             const chunkStems: Record<string, { count: number; urlBase: string }> = {};
-            for (const [stemName, info] of Object.entries(manifest.stems)) {
-              if (
-                stems.includes(stemName) &&
-                typeof info.count === "number" &&
-                info.count > 0
-              ) {
-                chunkStems[stemName] = {
-                  count: info.count,
-                  urlBase: `/songs/${encodeURIComponent(slug)}/stems/chunks/${encodeURIComponent(stemName)}`,
-                };
-              }
+            for (const stemName of stems) {
+              chunkStems[stemName] = {
+                count: parsed.stems[stemName].count,
+                urlBase: `/songs/${encodeURIComponent(slug)}/stems/chunks/${encodeURIComponent(stemName)}`,
+              };
             }
-            if (Object.keys(chunkStems).length === stems.length) {
-              chunks = { chunkSeconds: manifest.chunkSeconds, ext, stems: chunkStems };
-            }
+            chunks = { chunkSeconds: parsed.chunkSeconds, ext: parsed.ext, stems: chunkStems };
           }
         } catch {
           /* malformed chunks manifest — fall back to whole-file stems */

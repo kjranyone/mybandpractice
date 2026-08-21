@@ -44,8 +44,23 @@ export class SyncSender {
     const songs: SyncManifest["songs"] = [];
     for (const [slug, rawFiles] of bySlug) {
       if (slug === "setlists") continue; // sibling dir, not a song
+
+      // Chunked songs stream from stems/chunks/ at playback; whole-file
+      // stems are superseded (same policy as adb sync) — skip them to keep
+      // transfers ~8x smaller. Unchunked songs keep their full stems.
+      const hasChunks = rawFiles.some(
+        (f) => f.name === `${slug}/stems/chunks/chunks.json`,
+      );
+      const isWholeStem = (name: string) =>
+        name.startsWith(`${slug}/stems/`) &&
+        !name.startsWith(`${slug}/stems/chunks/`) &&
+        /\.(flac|ogg|opus|mp3|wav|m4a)$/i.test(name);
+      const sendFiles = hasChunks
+        ? rawFiles.filter((f) => !isWholeStem(f.name))
+        : rawFiles;
+
       const files: ManifestFile[] = [];
-      for (const f of rawFiles) {
+      for (const f of sendFiles) {
         if (f.name.endsWith(".part")) continue;
         onProgress?.(f.name);
         // streaming hash — the file is never fully buffered
@@ -76,20 +91,27 @@ export class SyncSender {
 
       const stems = [
         ...new Set(
-          rawFiles
-            .filter(
-              (f) =>
-                f.name.startsWith(`${slug}/stems/`) &&
-                (f.name.toLowerCase().endsWith(".flac") ||
-                  f.name.toLowerCase().endsWith(".ogg") ||
-                  f.name.toLowerCase().endsWith(".opus") ||
-                  f.name.toLowerCase().endsWith(".mp3")),
-            )
-            .map((f) =>
-              f.name
-                .slice(`${slug}/stems/`.length)
-                .replace(/\.(flac|ogg|opus|mp3)$/i, ""),
-            ),
+          (hasChunks
+            ? // chunked: derive stem names from chunk directories
+              rawFiles
+                .filter((f) => f.name.startsWith(`${slug}/stems/chunks/`))
+                .map((f) => f.name.split(`${slug}/stems/chunks/`)[1]?.split("/")[0])
+                .filter((s): s is string => !!s)
+            : rawFiles
+                .filter(
+                  (f) =>
+                    f.name.startsWith(`${slug}/stems/`) &&
+                    (f.name.toLowerCase().endsWith(".flac") ||
+                      f.name.toLowerCase().endsWith(".ogg") ||
+                      f.name.toLowerCase().endsWith(".opus") ||
+                      f.name.toLowerCase().endsWith(".mp3")),
+                )
+                .map((f) =>
+                  f.name
+                    .slice(`${slug}/stems/`.length)
+                    .replace(/\.(flac|ogg|opus|mp3)$/i, ""),
+                )
+          ).filter((s) => s && !s.includes("/")),
         ),
       ].filter(
         (s) => !["mix", "mixdown", "original"].includes(s.toLowerCase()),
