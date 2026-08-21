@@ -21,8 +21,9 @@ setlists/*
 node_modules/
 dist/
 build/
-package-lock.json
 .venv/
+# keep the web lockfile for reproducible CI installs
+!web/package-lock.json
 
 # Stem separation models & external tools (large binaries)
 tools/

@@ -38,7 +38,8 @@ jobs:
         run: pip install ruff
       - name: Lint pipeline scripts
         run: |
-          ruff check bin/mbp.py bin/make-stem-chunks.py bin/convert-audio.py bin/separate-stems.py
+          # EXE001: Windows checkouts don't preserve the exec bit for shebanged scripts
+          ruff check --ignore EXE001 bin/mbp.py bin/make-stem-chunks.py bin/convert-audio.py bin/separate-stems.py
           ruff check bin/analyze-chords.py --select E9,F821,F811,F401,I001
       - name: Syntax-check all bin scripts
         run: python -c "import ast,glob; [ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('bin/*.py')]; print('syntax OK')"
