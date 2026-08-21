@@ -38,7 +38,7 @@ export function effectiveRowDuration(
   decodedDuration: number,
   chunkSeconds: number,
 ): number {
-  return Math.min(decodedDuration, chunkSeconds + 0.001);
+  return Math.min(decodedDuration, chunkSeconds);
 }
 
 /** Wall-clock duration a row will play, given an intra-chunk start offset

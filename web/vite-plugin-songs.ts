@@ -84,26 +84,32 @@ function listSongs(songsDir: string): SongSummary[] {
     // Pre-split sample-aligned chunks (bin/make-stem-chunks.py): served the
     // same way as on the device — instant playback decodes only the chunk at
     // the playhead. Whole-file stems above stay as the fallback path.
+    // The library may hold chunks only (bin/sync.ps1 and P2P sync skip
+    // whole-file stems when chunks exist), so derive the stem list from the
+    // manifest when no whole stem files were found.
     let chunks: SongSummary["chunks"];
-    if (stems && stems.length > 0) {
-      const manifestPath = path.join(stemsDir, "chunks", "chunks.json");
-      if (fs.existsSync(manifestPath)) {
-        try {
-          const raw = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
-          const parsed = parseChunkManifest(raw);
-          if (parsed && stems.every((s) => parsed.stems[s])) {
-            const chunkStems: Record<string, { count: number; urlBase: string }> = {};
-            for (const stemName of stems) {
-              chunkStems[stemName] = {
-                count: parsed.stems[stemName].count,
-                urlBase: `/songs/${encodeURIComponent(slug)}/stems/chunks/${encodeURIComponent(stemName)}`,
-              };
-            }
-            chunks = { chunkSeconds: parsed.chunkSeconds, ext: parsed.ext, stems: chunkStems };
+    const manifestPath = path.join(stemsDir, "chunks", "chunks.json");
+    if (fs.existsSync(manifestPath)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+        const parsed = parseChunkManifest(raw);
+        if (
+          parsed &&
+          (!stems || stems.every((s) => parsed.stems[s]))
+        ) {
+          const chunkStemNames = stems ?? Object.keys(parsed.stems).sort();
+          const chunkStems: Record<string, { count: number; urlBase: string }> = {};
+          for (const stemName of chunkStemNames) {
+            chunkStems[stemName] = {
+              count: parsed.stems[stemName].count,
+              urlBase: `/songs/${encodeURIComponent(slug)}/stems/chunks/${encodeURIComponent(stemName)}`,
+            };
           }
-        } catch {
-          /* malformed chunks manifest — fall back to whole-file stems */
+          chunks = { chunkSeconds: parsed.chunkSeconds, ext: parsed.ext, stems: chunkStems };
+          if (!stems) stems = chunkStemNames; // chunk-only library
         }
+      } catch {
+        /* malformed chunks manifest — fall back to whole-file stems */
       }
     }
 
@@ -118,7 +124,7 @@ function listSongs(songsDir: string): SongSummary[] {
       stems,
       stemUrls,
       chunks,
-      stemBaseUrl: stems
+      stemBaseUrl: stemUrls
         ? `/songs/${encodeURIComponent(slug)}/stems/`
         : undefined,
       hasLyrics: files.includes("lyrics.md"),

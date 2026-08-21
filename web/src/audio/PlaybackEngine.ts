@@ -20,6 +20,7 @@ import {
   locateChunk,
   rowWallDuration,
 } from "./chunkMath";
+import { decodeAudioBuffer } from "./decodeAudio";
 import type { SongSummary } from "../types";
 import { clamp } from "../utils/format";
 
@@ -69,9 +70,52 @@ const MAX_FULL_CACHE_SONGS = 2;
 // Chunked songs only retain a small window of chunks; cache a couple of songs.
 const MAX_CHUNK_CACHE_SONGS = 2;
 /** Decode-ahead lead time (wall seconds) before scheduling the next chunk. */
-const CHUNK_KICK_LEAD = 1.0;
+const CHUNK_KICK_LEAD = 8.0;
 /** Schedule the next chunk's sources this close to the boundary (wall secs). */
-const CHUNK_SCHEDULE_LEAD = 0.25;
+const CHUNK_SCHEDULE_LEAD = 2.0;
+/** Samples adjusted on either side of a chunk junction (~2.67ms at 48kHz). */
+const EDGE_SMOOTH_SAMPLES = 128;
+
+/**
+ * Make a newly decoded chunk meet cached neighbours at the same sample value.
+ * Only mutate the new buffer: cached/playing buffers must not be adjusted
+ * repeatedly when an evicted chunk is decoded again after a backward seek.
+ */
+function smoothChunkEdges(
+  buf: AudioBuffer,
+  previous: AudioBuffer | null,
+  next: AudioBuffer | null,
+) {
+  const N = Math.min(EDGE_SMOOTH_SAMPLES, Math.floor(buf.length / 4));
+  if (N <= 0) return;
+
+  if (previous) {
+    const numChannels = Math.min(buf.numberOfChannels, previous.numberOfChannels);
+    for (let ch = 0; ch < numChannels; ch++) {
+      const data = buf.getChannelData(ch);
+      const start = data[0];
+      const join = previous.getChannelData(ch)[previous.length - 1];
+      for (let i = 0; i < N; i++) {
+        const w = N === 1 ? 0 : (1 - Math.cos((Math.PI * i) / (N - 1))) / 2;
+        data[i] += (join - start) * (1 - w);
+      }
+    }
+  }
+
+  if (next) {
+    const numChannels = Math.min(buf.numberOfChannels, next.numberOfChannels);
+    for (let ch = 0; ch < numChannels; ch++) {
+      const data = buf.getChannelData(ch);
+      const end = data[data.length - 1];
+      const join = next.getChannelData(ch)[0];
+      for (let i = 0; i < N; i++) {
+        const w = N === 1 ? 1 : (1 - Math.cos((Math.PI * i) / (N - 1))) / 2;
+        const idx = data.length - N + i;
+        data[idx] += (join - end) * w;
+      }
+    }
+  }
+}
 
 type GraphNodes = {
   masterGain: GainNode;
@@ -146,10 +190,10 @@ export class PlaybackEngine {
         (globalThis as unknown as { webkitAudioContext?: typeof AudioContext })
           .webkitAudioContext ??
         (window as unknown as { AudioContext: typeof AudioContext }).AudioContext;
-      // 48 kHz matches the device output and the default Opus chunks, so the
-      // primary decode path never resamples (44.1 kHz sources resample once
-      // at decode — measured acceptable on the rare full-file fallback).
-      this.ctx = new AC({ sampleRate: 48000 });
+      // Let the browser use the hardware's native sample rate (e.g. 44.1kHz / 48kHz).
+      // Forcing 48kHz on 44.1kHz audio hardware causes real-time driver resampler
+      // buffer underflows / clock drift, producing random clicks/pops during playback.
+      this.ctx = new AC();
     }
     return this.ctx;
   }
@@ -208,6 +252,7 @@ export class PlaybackEngine {
           worklet,
           stemGains,
         };
+        this.routeStemGains();
         return ctx;
       })();
     }
@@ -218,9 +263,28 @@ export class PlaybackEngine {
     const g = this.graph;
     if (!g) return;
     const isPitched = this.pitch !== 0;
+
     for (const [name, gain] of g.stemGains) {
       gain.disconnect();
-      gain.connect(name === "drums" && isPitched ? g.bypass : g.pitchIn);
+      if (!isPitched) {
+        // Zero pitch shift: bypass AudioWorklet completely to eliminate JS worklet underrun pops
+        gain.connect(g.masterGain);
+      } else {
+        gain.connect(name === "drums" ? g.bypass : g.pitchIn);
+      }
+    }
+    g.mixGain.disconnect();
+    if (!isPitched) {
+      g.mixGain.connect(g.masterGain);
+    } else {
+      g.mixGain.connect(g.pitchIn);
+    }
+
+    g.postPitchGain.disconnect();
+    g.bypassDelay.disconnect();
+    if (isPitched) {
+      g.postPitchGain.connect(g.masterGain);
+      g.bypassDelay.connect(g.masterGain);
     }
   }
 
@@ -238,18 +302,34 @@ export class PlaybackEngine {
   }
 
   stopSources(fadeMs = 8) {
+    const oldSources = Array.from(this.activeSources.values());
+    this.activeSources.clear();
+
+    // 1. Immediately detach onended handlers so dying sources cannot trigger
+    // background ticks or premature chunk scheduler invocations.
+    for (const src of oldSources) {
+      src.onended = null;
+    }
+
     const ctx = this.ctx;
     const g = this.graph;
-    if (!ctx || !g) {
-      for (const src of this.activeSources.values()) {
+    if (!ctx || !g || fadeMs <= 0) {
+      for (const src of oldSources) {
         try {
-          src.stop();
+          src.stop(0);
+        } catch {
+          try {
+            src.stop();
+          } catch {
+            /* ignore */
+          }
+        }
+        try {
           src.disconnect();
         } catch {
           /* ignore */
         }
       }
-      this.activeSources.clear();
       return;
     }
 
@@ -266,22 +346,23 @@ export class PlaybackEngine {
     g.mixGain.gain.setValueAtTime(g.mixGain.gain.value, t);
     g.mixGain.gain.linearRampToValueAtTime(0, t + fadeSec);
 
-    const oldSources = Array.from(this.activeSources.values());
-    this.activeSources.clear();
-
     for (const src of oldSources) {
       try {
         src.stop(t + fadeSec + 0.002);
-        setTimeout(() => {
-          try {
-            src.disconnect();
-          } catch {
-            /* ignore */
-          }
-        }, fadeMs + 20);
       } catch {
-        /* ignore */
+        try {
+          src.stop();
+        } catch {
+          /* ignore */
+        }
       }
+      setTimeout(() => {
+        try {
+          src.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }, fadeMs + 10);
     }
   }
 
@@ -384,12 +465,15 @@ export class PlaybackEngine {
           return null;
         }
         const ab = await res.arrayBuffer();
-        const buf = await ctx.decodeAudioData(ab);
+        const buf = await decodeAudioBuffer(ctx, ab);
         console.log(
           `[AudioPlayer] chunk ${cs.slug}/${stem}/${idx}: ${((performance.now() - t0) | 0)}ms ${buf.duration.toFixed(3)}s`,
         );
         const target = cs.chunks.get(stem);
-        if (target) target[idx] = buf;
+        if (target) {
+          target[idx] = buf;
+          smoothChunkEdges(buf, target[idx - 1] ?? null, target[idx + 1] ?? null);
+        }
         return buf;
       } catch (err) {
         console.error(`[AudioPlayer] Chunk decode error ${stem}/${idx}:`, err);
@@ -444,7 +528,7 @@ export class PlaybackEngine {
           }
           const ab = await res.arrayBuffer();
           const t1 = performance.now();
-          const buf = await ctx.decodeAudioData(ab);
+          const buf = await decodeAudioBuffer(ctx, ab);
           const t2 = performance.now();
           console.log(
             `[AudioPlayer] ${url.split("/").pop()}: fetch=${(t1 - t0).toFixed(0)}ms decode=${(t2 - t1).toFixed(0)}ms bytes=${(ab.byteLength / 1048576).toFixed(1)}MB dur=${buf.duration.toFixed(0)}s`,
@@ -610,7 +694,11 @@ export class PlaybackEngine {
         stemGain.gain.value = targetLevel;
         g.stemGains.set(stemName, stemGain);
         stemGain.connect(
-          stemName === "drums" && this.pitch !== 0 ? g.bypass : g.pitchIn,
+          this.pitch === 0
+            ? g.masterGain
+            : stemName === "drums"
+              ? g.bypass
+              : g.pitchIn,
         );
       }
       const targetLevel = this.stemLevels[stemName] ?? 1;
@@ -620,11 +708,16 @@ export class PlaybackEngine {
       src.connect(stemGain);
       src.start(now, Math.min(intra, Math.max(0, buf.duration - 0.01)));
       src.stop(now + rowWallDur);
-      if (stemName === cs.stems[0]) {
-        // Boundary safety net: an immediate tick when the lead source ends
-        // recovers scheduling even if timer ticks jittered.
-        src.onended = () => this.tick();
-      }
+      const curSeq = seq;
+      src.onended = () => {
+        if (this.startSeq !== curSeq) return;
+        this.activeSources.delete(`${stemName}#${i0}`);
+        if (stemName === cs.stems[0] && this.playing) {
+          // Boundary safety net: an immediate tick when the lead source ends
+          // recovers scheduling even if timer ticks jittered.
+          this.tick();
+        }
+      };
       this.activeSources.set(`${stemName}#${i0}`, src);
     }
 
@@ -648,6 +741,7 @@ export class PlaybackEngine {
     this.stopSources(8);
     this.routeStemGains();
 
+    const seq = ++this.startSeq;
     const g = this.graph;
     if (!g) return;
 
@@ -673,7 +767,11 @@ export class PlaybackEngine {
           stemGain.gain.value = targetLevel;
           g.stemGains.set(stemName, stemGain);
           stemGain.connect(
-            stemName === "drums" && this.pitch !== 0 ? g.bypass : g.pitchIn,
+            this.pitch === 0
+              ? g.masterGain
+              : stemName === "drums"
+                ? g.bypass
+                : g.pitchIn,
           );
         }
         // Anchor exactly at the target level: not a single sample leaks at 1.0.
@@ -682,6 +780,14 @@ export class PlaybackEngine {
 
         src.connect(stemGain);
         src.start(now, safeOffset);
+        const curSeq = seq;
+        src.onended = () => {
+          if (this.startSeq !== curSeq) return;
+          this.activeSources.delete(stemName);
+          if (stemName === "vocals" && this.playing) {
+            this.tick();
+          }
+        };
         this.activeSources.set(stemName, src);
       }
     } else if (buf.mix) {
@@ -693,6 +799,14 @@ export class PlaybackEngine {
       g.mixGain.gain.linearRampToValueAtTime(1, now + fadeSec);
       src.connect(g.mixGain);
       src.start(now, safeOffset);
+      const curSeq = seq;
+      src.onended = () => {
+        if (this.startSeq !== curSeq) return;
+        this.activeSources.delete("mix");
+        if (this.playing) {
+          this.tick();
+        }
+      };
       this.activeSources.set("mix", src);
     }
   }
@@ -795,17 +909,16 @@ export class PlaybackEngine {
       if (res === "superseded") return "cancelled";
       if (res === "failed") {
         if (hooks?.isStale?.()) return "cancelled";
+        console.warn(
+          `[AudioPlayer] Chunked start failed for ${song.slug}, falling back to full decode`,
+        );
+      } else {
+        this.setPlaying(true);
+        this.setBuffered(1);
         this.setBuffering(false);
-        this.setBuffered(0);
-        this.setPlaying(false);
-        this.events.onError("Could not decode this song's audio");
-        return "failed";
+        setTimeout(() => hooks?.onPrefetch?.(song), 800);
+        return "ok";
       }
-      this.setPlaying(true);
-      this.setBuffered(1);
-      this.setBuffering(false);
-      setTimeout(() => hooks?.onPrefetch?.(song), 800);
-      return "ok";
     }
 
     // 2. Full decode path — global buffering UI shows instantly, mixer gains
@@ -904,8 +1017,10 @@ export class PlaybackEngine {
     while (sched.nextIdx <= lastIdx) {
       const idx = sched.nextIdx;
       const remain = sched.nextWallTime - ctx.currentTime;
+      const kickLead = Math.min(CHUNK_KICK_LEAD, cs.chunkSeconds * 0.5);
+      const schedLead = Math.min(CHUNK_SCHEDULE_LEAD, cs.chunkSeconds * 0.25);
 
-      if (remain > CHUNK_KICK_LEAD) return;
+      if (remain > kickLead) return;
 
       if (!sched.kick) {
         sched.kick = this.ensureChunkRow(cs, idx).then((ok) => {
@@ -914,7 +1029,7 @@ export class PlaybackEngine {
           return ok;
         });
       }
-      if (remain > CHUNK_SCHEDULE_LEAD) return;
+      if (remain > schedLead) return;
       if (sched.rowFails >= 3) {
         this.events.onError("Chunk streaming failed — audio file missing or corrupt");
         return;
@@ -942,9 +1057,14 @@ export class PlaybackEngine {
         src.connect(stemGain);
         src.start(when, 0);
         src.stop(when + rowDur / rate);
-        if (stemName === cs.stems[0]) {
-          src.onended = () => this.tick();
-        }
+        const curSeq = this.startSeq;
+        src.onended = () => {
+          if (this.startSeq !== curSeq) return;
+          this.activeSources.delete(`${stemName}#${idx}`);
+          if (stemName === cs.stems[0] && this.playing) {
+            this.tick();
+          }
+        };
         this.activeSources.set(`${stemName}#${idx}`, src);
       }
       sched.nextWallTime = when + rowDur / rate;

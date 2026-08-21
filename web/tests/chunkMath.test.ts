@@ -45,7 +45,7 @@ describe("effectiveRowDuration", () => {
     expect(effectiveRowDuration(30.0, 30)).toBeCloseTo(30.0, 9);
   });
   it("clamps Opus end padding to the nominal boundary", () => {
-    expect(effectiveRowDuration(30.0065, 30)).toBeCloseTo(30.001, 9);
+    expect(effectiveRowDuration(30.0065, 30)).toBeCloseTo(30.0, 9);
   });
   it("keeps a short final chunk as-is", () => {
     expect(effectiveRowDuration(2.32, 30)).toBeCloseTo(2.32, 9);

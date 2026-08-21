@@ -1,4 +1,5 @@
 import { clamp } from "./format";
+import { decodeAudioBuffer } from "../audio/decodeAudio";
 
 // Peaks are decoded once per track at a fixed high resolution, then cheaply
 // downsampled to any bar count (so resizing never re-decodes the audio).
@@ -87,7 +88,7 @@ async function loadHiResPeaks(audioUrl: string): Promise<number[]> {
     // Decode at the library's native rate via an offline context: no
     // resampling and no second hardware AudioContext on Android.
     const ctx = new OfflineAudioContext(1, 128, 44100);
-    const decoded = await ctx.decodeAudioData(buf);
+    const decoded = await decodeAudioBuffer(ctx, buf);
     const ch = decoded.getChannelData(0);
     peaks = downsamplePeaks(ch, HI_RES_BARS);
   } catch {

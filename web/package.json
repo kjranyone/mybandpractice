@@ -17,6 +17,7 @@
     "@capgo/capacitor-media-session": "^8.0.29",
     "jsqr": "^1.4.0",
     "lz-string": "^1.5.0",
+    "ogg-opus-decoder": "^1.7.3",
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

@@ -426,8 +426,15 @@ export function useAudioPlayer(songs: SongSummary[]) {
   // Foreground-only smooth UI clock (engine logic lives in the worker ticker)
   useEffect(() => {
     let animId = 0;
+    let lastTime = 0;
     const uiFrame = () => {
-      if (engine.playing) setCurrentTime(engine.currentTime);
+      if (engine.playing) {
+        const cur = engine.currentTime;
+        if (Math.abs(cur - lastTime) >= 0.033) {
+          lastTime = cur;
+          setCurrentTime(cur);
+        }
+      }
       animId = requestAnimationFrame(uiFrame);
     };
     animId = requestAnimationFrame(uiFrame);

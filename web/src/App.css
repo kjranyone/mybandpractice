@@ -1102,7 +1102,6 @@
   border-radius: 1px;
   background: #3a414f;
   align-self: center;
-  transition: background 0.05s linear;
 }
 
 .wf-bar.is-played {
