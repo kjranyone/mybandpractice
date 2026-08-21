@@ -24,12 +24,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 import requests
 import yaml
@@ -282,7 +280,7 @@ def fetch_fallback(artist: str, title: str) -> dict | None:
     )
     try:
         html = get(url)
-    except Exception:
+    except Exception:  # noqa: BLE001 — network/scrape failures mean "no lyrics"
         return None
 
     soup = BeautifulSoup(html, "lxml")
@@ -344,8 +342,7 @@ def to_markdown(meta: dict, parsed: dict, source_url: str) -> str:
     lines.append(f"*{parsed['artist'] or meta.get('artist', '')}*")
     lines.append("")
     for stanza in parsed["stanzas"]:
-        for ln in stanza:
-            lines.append(ln)
+        lines.extend(stanza)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -377,7 +374,7 @@ def process_song(song_dir: Path, force: bool = False) -> str:
             best = pick_best(candidates, artist, title) if candidates else None
         else:
             candidates = []
-    except Exception:
+    except Exception:  # noqa: BLE001 — search failures fall through to other sources
         candidates = []
 
     if best and song_url_pattern:
@@ -447,7 +444,7 @@ def main() -> None:
     for d in targets:
         try:
             status = process_song(d, force=args.force)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — isolate per-song failures
             status = f"error: {type(e).__name__}: {e}"
         tag = status.split()[0]
         if tag == "ok":

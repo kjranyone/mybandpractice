@@ -153,6 +153,27 @@ function Sync-Songs {
   $DeviceParent = "/storage/emulated/0/Android/data/$Pkg/files"
   $DeviceSetlistsDir = "/storage/emulated/0/Android/data/$Pkg/files/setlists"
   & $adbExe -s $target shell "mkdir -p '$DeviceParent'"
+
+  # Preserve on-device practice data (markers, stanza tags) created on the
+  # tablet: pull every practice.json first and re-push it after the wipe.
+  # Device-side practice data wins over the PC copy (same policy as P2P sync).
+  $PracticeBackup = Join-Path $env:TEMP "mbp-practice-backup"
+  if (Test-Path $PracticeBackup) { Remove-Item $PracticeBackup -Recurse -Force }
+  New-Item -ItemType Directory -Force $PracticeBackup | Out-Null
+  $pulled = 0
+  foreach ($songDir in (Get-ChildItem $Songs -Directory)) {
+    $slug = $songDir.Name
+    $devPractice = "$DeviceSongsDir/$slug/practice.json"
+    # adb pull fails silently-ish on missing files; test existence first
+    $exists = (& $adbExe -s $target shell "test -f '$devPractice' && echo yes" | Out-String).Trim()
+    if ($exists -eq "yes") {
+      $dest = Join-Path $PracticeBackup "$slug.json"
+      & $adbExe -s $target pull "$devPractice" "$dest" | Out-Null
+      if (Test-Path $dest) { $pulled++ }
+    }
+  }
+  if ($pulled -gt 0) { Write-Host "==> preserving $pulled on-device practice.json file(s)" -ForegroundColor Cyan }
+
   & $adbExe -s $target shell "rm -rf '$DeviceSongsDir' '$DeviceSetlistsDir'"
 
   # Push per song, skipping whole-file stems when chunks exist: chunks
@@ -184,6 +205,22 @@ function Sync-Songs {
       }
     }
   }
+
+  # Restore preserved practice data (device wins over PC copies)
+  $restored = 0
+  foreach ($bak in (Get-ChildItem $PracticeBackup -Filter *.json -ErrorAction SilentlyContinue)) {
+    $slug = $bak.BaseName
+    & $adbExe -s $target push "$($bak.FullName)" "$DeviceSongsDir/$slug/practice.json" | Out-Null
+    $restored++
+  }
+  if ($restored -gt 0) {
+    Write-Host "==> restored $restored practice.json file(s) from device" -ForegroundColor Green
+    # mirror into the local library so PC and device stay in sync
+    foreach ($bak in (Get-ChildItem $PracticeBackup -Filter *.json)) {
+      Copy-Item $bak.FullName (Join-Path $Songs "$($bak.BaseName)\practice.json") -Force
+    }
+  }
+  Remove-Item $PracticeBackup -Recurse -Force -ErrorAction SilentlyContinue
 
   $Setlists = Join-Path $Root "setlists"
   if (Test-Path $Setlists) {

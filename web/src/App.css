@@ -1332,6 +1332,26 @@
   text-shadow: 0 0 10px rgba(94, 234, 212, 0.4);
 }
 
+/* Transient playback error toast (decode/stream failures) */
+.error-toast {
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  max-width: min(34rem, 90vw);
+  padding: 0.6rem 1rem;
+  border-radius: 0.6rem;
+  background: rgba(127, 29, 29, 0.92);
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  color: #fecaca;
+  font-size: 0.82rem;
+  font-family: var(--mono);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  animation: fadeIn 0.15s ease-out;
+  pointer-events: none;
+}
+
 /* Deck row */
 .player-deck {
   display: grid;

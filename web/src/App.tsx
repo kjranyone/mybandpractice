@@ -225,6 +225,9 @@ export default function App() {
       >
         {listOpen ? "✕" : "☰"}
       </button>
+      {player.playbackError && (
+        <div className="error-toast" role="alert">{player.playbackError}</div>
+      )}
       <div
         className={`sidebar-backdrop${listOpen ? " is-open" : ""}`}
         onClick={() => setListOpen(false)}

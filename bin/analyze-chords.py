@@ -80,7 +80,7 @@ def load_song_metadata(song_dir: Path) -> dict:
                             meta["bpm"] = float(data["bpm"])
                         if "downbeat_phase" in data and isinstance(data["downbeat_phase"], int):
                             meta["downbeat_phase"] = data["downbeat_phase"]
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 — meta hints are optional
                 pass
     return meta
 
@@ -404,8 +404,8 @@ def compute_optimal_measure_grid(
     drum_energy = kick_band + snare_band
     drop_indices = []
     for b_i in range(1, len(beat_times)):
-        f_prev = int(round(beat_times[b_i - 1] * sr / hop))
-        f_cur = int(round(beat_times[b_i] * sr / hop))
+        f_prev = round(beat_times[b_i - 1] * sr / hop)
+        f_cur = round(beat_times[b_i] * sr / hop)
         if f_cur < len(drum_energy):
             e_prev = drum_energy[f_prev] if f_prev < len(drum_energy) else 0.0
             e_cur = drum_energy[f_cur]
@@ -425,7 +425,7 @@ def compute_optimal_measure_grid(
             if idx < phi:
                 continue
             beat_in_bar = (idx - phi) % primary_meter
-            f = int(round(t * sr / hop))
+            f = round(t * sr / hop)
             if f >= len(kick_band):
                 continue
 
@@ -493,7 +493,7 @@ def compute_optimal_measure_grid(
     if best_phi > 0 and beat_times[best_phi] > 0.35:
         pickup_start = 0.0
         pickup_end = float(round(beat_times[best_phi], 2))
-        pickup_beats = max(1, int(round(pickup_end / beat_period)))
+        pickup_beats = max(1, round(pickup_end / beat_period))
         measures.append((pickup_start, pickup_end, pickup_beats))
 
     # Main measure sequence
@@ -559,7 +559,7 @@ def apply_music_theory_heuristics(
         next_ch = corrected[i + 1]["chord"]
 
         cur_root, cur_qual, cur_bass = parse_chord_components(cur_ch)
-        next_root, next_qual, _ = parse_chord_components(next_ch)
+        next_root, _, _ = parse_chord_components(next_ch)
 
         if cur_root in PITCH_NAMES and next_root in PITCH_NAMES:
             c_idx = PITCH_NAMES.index(cur_root)
@@ -573,23 +573,21 @@ def apply_music_theory_heuristics(
             # e.g. A (9) -> D (2) -> (9 - 2) % 12 = 7!
             is_perfect_5th_resolution = ((c_idx - n_idx) % 12 == 7)
 
-            if is_perfect_5th_resolution:
-                # If resolving to minor tonic (e.g. B -> Em) or major (G -> C):
-                # Upgrade minor/sus artifacts to Dominant 7th or Major Dominant
-                if cur_qual in ("m", "m7", "sus4", "sus2", "5"):
-                    # Check if resolving to minor tonic or major
-                    new_qual = "7" if cur_qual in ("m7", "7") else ""
-                    reconstructed = f"{cur_root}{new_qual}"
-                    if cur_bass:
-                        reconstructed += f"/{cur_bass}"
-                    corrected[i]["chord"] = reconstructed
+            # If resolving to minor tonic (e.g. B -> Em) or major (G -> C):
+            # Upgrade minor/sus artifacts to Dominant 7th or Major Dominant
+            if is_perfect_5th_resolution and cur_qual in ("m", "m7", "sus4", "sus2", "5"):
+                new_qual = "7" if cur_qual in ("m7", "7") else ""
+                reconstructed = f"{cur_root}{new_qual}"
+                if cur_bass:
+                    reconstructed += f"/{cur_bass}"
+                corrected[i]["chord"] = reconstructed
 
     # Pass 3: II -> V -> I supertonic cadence recognition
     # e.g. F#m7 -> B7 -> Em  or  Dm7 -> G7 -> C  or  A#m7 -> C7 -> Fm
     for i in range(n - 2):
-        c1_root, c1_qual, _ = parse_chord_components(corrected[i]["chord"])
+        c1_root, _, _ = parse_chord_components(corrected[i]["chord"])
         c2_root, c2_qual, _ = parse_chord_components(corrected[i + 1]["chord"])
-        c3_root, c3_qual, _ = parse_chord_components(corrected[i + 2]["chord"])
+        c3_root, _, _ = parse_chord_components(corrected[i + 2]["chord"])
 
         if c1_root in PITCH_NAMES and c2_root in PITCH_NAMES and c3_root in PITCH_NAMES:
             idx1 = PITCH_NAMES.index(c1_root)
@@ -598,13 +596,15 @@ def apply_music_theory_heuristics(
 
             # II -> V -> I intervals: (idx1 - idx2)%12 == 7 and (idx2 - idx3)%12 == 7
             # e.g. F# (6) -> B (11) -> E (4)
-            if ((idx1 - idx2) % 12 == 7) and ((idx2 - idx3) % 12 == 7):
-                # Ensure c2 is dominant 7th
-                if "7" not in c2_qual and c2_qual not in ("maj7", "dim"):
-                    base, bass = corrected[i + 1]["chord"], ""
-                    if "/" in base:
-                        base, bass = base.split("/", 1)
-                    corrected[i + 1]["chord"] = f"{c2_root}7" + (f"/{bass}" if bass else "")
+            # II -> V -> I confirmed; ensure c2 is dominant 7th
+            if (
+                ((idx1 - idx2) % 12 == 7) and ((idx2 - idx3) % 12 == 7)
+                and "7" not in c2_qual and c2_qual not in ("maj7", "dim")
+            ):
+                base, bass = corrected[i + 1]["chord"], ""
+                if "/" in base:
+                    base, bass = base.split("/", 1)
+                corrected[i + 1]["chord"] = f"{c2_root}7" + (f"/{bass}" if bass else "")
 
     # Pass 4: Tonic minor quality resolution (in minor keys, raw root triad defaults to minor)
     tonic_name = PITCH_NAMES[key_root]
@@ -636,22 +636,24 @@ def apply_music_theory_heuristics(
     # Pass 6: Intro Entrance Cleansing (remove pre-riff dominant leakage)
     if len(corrected) >= 1:
         first_c = corrected[0]
-        f_root, _, _ = parse_chord_components(first_c["chord"])
-        if first_c["start"] <= 0.2:
+        _, _, _ = parse_chord_components(first_c["chord"])
+        if (
+            first_c["start"] <= 0.2
             # If first chord extends into the main riff (e.g. 0.0 to 2.0s)
-            if len(corrected) >= 2 and corrected[1]["root"] == tonic_name:
-                # If first segment extends past 1.6s, split it at 1.65s
-                if first_c["end"] > 1.60:
-                    t_split = min(1.67, first_c["end"])
-                    corrected.insert(1, {
-                        "chord": f"{tonic_name}m" if key_is_minor else tonic_name,
-                        "root": tonic_name,
-                        "start": t_split,
-                        "end": first_c["end"],
-                    })
-                    first_c["end"] = t_split
-                first_c["chord"] = "N.C."
-                first_c["root"] = "N.C."
+            and len(corrected) >= 2 and corrected[1]["root"] == tonic_name
+        ):
+            # If first segment extends past 1.6s, split it at 1.65s
+            if first_c["end"] > 1.60:
+                t_split = min(1.67, first_c["end"])
+                corrected.insert(1, {
+                    "chord": f"{tonic_name}m" if key_is_minor else tonic_name,
+                    "root": tonic_name,
+                    "start": t_split,
+                    "end": first_c["end"],
+                })
+                first_c["end"] = t_split
+            first_c["chord"] = "N.C."
+            first_c["root"] = "N.C."
 
     return corrected
 
@@ -783,8 +785,8 @@ def detect_cadence_type(
 
     # Check consecutive chords for cadences
     for i in range(len(chords) - 1):
-        r1, q1, _ = parse_chord_components(chords[i])
-        r2, q2, _ = parse_chord_components(chords[i + 1])
+        r1, _, _ = parse_chord_components(chords[i])
+        r2, _, _ = parse_chord_components(chords[i + 1])
         if not r1 or not r2 or r1 not in PITCH_NAMES or r2 not in PITCH_NAMES:
             continue
 
@@ -793,7 +795,6 @@ def detect_cadence_type(
         intv_down = (i1 - i2) % 12
 
         a1 = analyses[i]
-        a2 = analyses[i + 1]
 
         # 1. Dominant 5th resolution (intv_down == 7)
         if intv_down == 7 and a1["is_dom"]:
@@ -850,7 +851,7 @@ def analyze_song_chords(
     bass_file = find_stem("bass") or stems_dir / "bass.ogg"
     drums_file = find_stem("drums") or stems_dir / "drums.ogg"
     other_file = find_stem("other") or stems_dir / "other.ogg"
-    vocals_file = find_stem("vocals") or stems_dir / "vocals.ogg"
+    # (vocals stem resolved nowhere — analysis uses bass + other + drums only)
 
     print(f"==> analyzing chords for '{song_dir.name}' with BTC Transformer + Music Theory Engine ...")
     t0 = time.time()
@@ -874,18 +875,13 @@ def analyze_song_chords(
             if drums_file.exists()
             else (y_other, sr)
         )
-        y_vocals, _ = (
-            librosa.load(str(vocals_file), sr=sr, mono=True)
-            if vocals_file.exists()
-            else (None, sr)
-        )
+        # (vocals stem intentionally not loaded — not used by the analysis)
         # Combine bass + other for optimal harmonic clarity
         original_wav = y_bass + y_other
     else:
         original_wav, _ = librosa.load(str(audio_file), sr=sr, mono=True)
         y_bass = original_wav
         y_drums = original_wav
-        y_vocals = None
 
     # 3. Beat / Tempo / Downbeat Detection (prior-free tempogram + kick-band
     #    beat-level disambiguation + downbeat phase estimation)
@@ -1244,7 +1240,7 @@ def main() -> None:
             try:
                 analyze_song_chords(song_dir, btc_bundle=bundle)
                 succeeded += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — isolate per-song failures
                 print(f"ERROR analyzing {song_dir.name}: {e}")
                 failed.append((song_dir.name, str(e)))
 

@@ -32,7 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -69,7 +69,7 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 def run_live(cmd: list[str]) -> int:
     """Run a command streaming stdout/stderr to the terminal (for progress)."""
-    return subprocess.run(cmd, env=UTF8_ENV).returncode
+    return subprocess.run(cmd, env=UTF8_ENV, check=False).returncode
 
 
 # --------------------------------------------------------------------------- #
@@ -169,7 +169,7 @@ def romanize(s: str) -> str:
             if item["hepburn"]:
                 out.append(item["hepburn"])
         return " ".join(out)
-    except Exception:
+    except Exception:  # noqa: BLE001 — romanization is best-effort
         return s
 
 
@@ -187,7 +187,7 @@ def make_slug(raw_title: str) -> str:
 
 
 def iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def hms(seconds: float) -> str:
@@ -350,7 +350,7 @@ def process(
     assume_yes: bool = False,
     name_override: str | None = None,
 ) -> Path:
-    print(f"[1/5] fetching metadata ...")
+    print("[1/5] fetching metadata ...")
     meta = fetch_meta(url)
     title = meta.get("title", "untitled")
     uploader = meta.get("uploader") or meta.get("channel") or ""
@@ -380,13 +380,13 @@ def process(
     with tempfile.TemporaryDirectory(prefix="ytmp3_") as tmp:
         tmp_dir = Path(tmp)
 
-        print(f"[2/5] downloading best audio ...")
+        print("[2/5] downloading best audio ...")
         source = download_audio(url, tmp_dir)
         src_duration = probe_duration(source)
         print(f"      source: {source.name}  ({hms(src_duration)})")
 
         # --- pass 1: silence trim + loudnorm measure ---
-        print(f"[3/5] measuring loudness (after silence trim) ...")
+        print("[3/5] measuring loudness (after silence trim) ...")
         silence_af = silence_filter(silence_db, keep_silence)
         measure_cmd = [
             "ffmpeg",
@@ -407,6 +407,7 @@ def process(
             encoding="utf-8",
             errors="replace",
             env=UTF8_ENV,
+            check=False,
         )
         if p1.returncode != 0:
             sys.exit("ffmpeg pass 1 failed:\n" + p1.stderr)
@@ -417,7 +418,7 @@ def process(
         )
 
         # --- pass 2: silence trim + loudnorm linear apply + mp3 encode ---
-        print(f"[4/5] applying loudnorm + trimming silence -> mp3 ...")
+        print("[4/5] applying loudnorm + trimming silence -> mp3 ...")
         apply_cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -442,7 +443,7 @@ def process(
             "-metadata",
             f"comment=source={resolved_url}",
             "-metadata",
-            f"genre=band-practice",
+            "genre=band-practice",
             str(audio_path),
         ]
         p2 = subprocess.run(
@@ -451,6 +452,7 @@ def process(
             encoding="utf-8",
             errors="replace",
             env=UTF8_ENV,
+            check=False,
         )
         if p2.returncode != 0:
             sys.exit("ffmpeg pass 2 failed:\n" + p2.stderr)
@@ -463,7 +465,7 @@ def process(
     )
 
     # --- meta.json ---
-    print(f"[5/5] writing meta.json ...")
+    print("[5/5] writing meta.json ...")
     record = {
         "slug": slug,
         "title": title,
@@ -597,6 +599,7 @@ def main() -> None:
         rc = subprocess.run(
             [sys.executable, str(ROOT / "bin" / "separate-stems.py"), song_dir.name],
             env=UTF8_ENV,
+            check=False,
         ).returncode
         if rc != 0:
             print("warning: stem separation failed (song was saved anyway)")

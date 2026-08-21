@@ -5,6 +5,7 @@ import {
   Filesystem,
   type ReaddirResult,
 } from "@capacitor/filesystem";
+import { parseChunkManifest } from "../audio/chunkMath";
 import type { SongSummary } from "../types";
 
 /**
@@ -192,35 +193,23 @@ export async function listNativeSongs(): Promise<SongSummary[]> {
       try {
         const manifestRaw = await readTextFile(`${dirPath}/stems/chunks/chunks.json`);
         if (manifestRaw) {
-          const manifest = JSON.parse(manifestRaw) as {
-            chunkSeconds?: number;
-            ext?: string;
-            stems?: Record<string, { count?: number }>;
-          };
-          const ext =
-            typeof manifest.ext === "string" &&
-            ["flac", "opus", "ogg"].includes(manifest.ext)
-              ? manifest.ext
-              : "flac";
-          if (
-            typeof manifest.chunkSeconds === "number" &&
-            manifest.chunkSeconds >= 5 &&
-            manifest.chunkSeconds <= 120 &&
-            manifest.stems
-          ) {
+          const parsed = parseChunkManifest(JSON.parse(manifestRaw));
+          if (parsed && stems.every((s) => parsed.stems[s])) {
             const chunksAbs = `${toAbs(baseUri)}/stems/chunks`;
             const chunkStems: Record<string, { count: number; urlBase: string }> = {};
-            for (const [stemName, info] of Object.entries(manifest.stems)) {
-              if (stems.includes(stemName) && typeof info.count === "number" && info.count > 0) {
-                chunkStems[stemName] = {
-                  count: info.count,
-                  urlBase: Capacitor.convertFileSrc(`${chunksAbs}/${encodeURIComponent(stemName)}`),
-                };
-              }
+            for (const stemName of stems) {
+              chunkStems[stemName] = {
+                count: parsed.stems[stemName].count,
+                urlBase: Capacitor.convertFileSrc(
+                  `${chunksAbs}/${encodeURIComponent(stemName)}`,
+                ),
+              };
             }
-            if (Object.keys(chunkStems).length === stems.length) {
-              chunks = { chunkSeconds: manifest.chunkSeconds, ext, stems: chunkStems };
-            }
+            chunks = {
+              chunkSeconds: parsed.chunkSeconds,
+              ext: parsed.ext,
+              stems: chunkStems,
+            };
           }
         }
       } catch {

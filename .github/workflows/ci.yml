@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  web:
+    name: Web (typecheck + test + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit -p tsconfig.json
+      - run: npx tsc --noEmit -p tsconfig.node.json
+      - run: npm test
+      - run: npm run build
+
+  bin:
+    name: bin (ruff + syntax smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint pipeline scripts
+        run: |
+          # EXE001: Windows checkouts don't preserve the exec bit for shebanged scripts
+          ruff check --ignore EXE001 bin/
+      - name: Syntax-check all bin scripts
+        run: python -c "import ast,glob; [ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('bin/*.py')]; print('syntax OK')"
