@@ -9,10 +9,11 @@
 ## 🚀 主な機能
 
 ### 🎧 1. バンド練習用 Web プレイヤー (`web/`)
+- **チャンク分割ストリーミング再生**: ステムを 30 秒・サンプル整列のチャンクに事前分割しておき、再生開始時に必要な最初のチャンク (~170ms) だけデコードして**約 0.4 秒で音出し**。以降は境界 1 秒前に次チャンクをジャストインタイムでデコード・シームレス接続 (ギャップレス)。シーク先のチャンクも ~0.25 秒で再開
 - **波形シークバー & マーカー機能**: A-Bリピートや特定のセクション（サビ、ギターソロ等）へのマーキング
 - **再生速度調整**: ピッチを維持したままスロー再生 / 高速再生
 - **ピッチシフター**: 再生速度を変えずに ±12 半音のキー変更 (AudioWorklet、0でバイパス)
-- **ミキサー & マイナスワン**: ステム (vocals/drums/bass/other) のオン/オフを Web Audio でライブ合成。ボーカルを消したインスト演奏 (マイナスワン) が可能。全オン時は原音ファイルを再生
+- **ミキサー & マイナスワン**: ステム (vocals/drums/bass/other) のオン/オフを Web Audio でライブ合成。ボーカルを消したインスト演奏 (マイナスワン) が可能。ミキサー設定はゲインが再生開始前に確定するため、原音が 1 サンプルも漏れない
 - **ステータスチップ**: 速度・ステム・音量を常時表示 (音量は割合インジケーター)。クリックでミキサーモーダル
 - **歌詞ディスプレイ**: 曲ごとの歌詞（`lyrics.md`）とメタデータを同時表示
 - **メディアセッション通知**: Android で音楽アプリ風の通知・ロック画面コントロール・バックグラウンド再生
@@ -30,10 +31,16 @@
 ### 🎚️ 4. ステム分離 (`bin/separate-stems.py`)
 - **AI 音源分離**: vocals / drums / bass / other の 4 ステムに自動分離
 - **アンサンブル標準**: 複数モデル (BS-RoFormer + SCNet) の結果を avg_wave で合成し高品質化
+- **PC マスターは FLAC**: 分離ステムはロスレス FLAC で保存 (品質マスター)。端末向けはチャンク生成時に Opus へ軽量トランスコード
 - **取り込み時実行**: `yt-to-mp3.py --stems` でダウンロードと同時に分離
 - **マルチ GPU 対応**: NVIDIA CUDA / Intel Arc XPU (VRAM ガード付きの明示指定) / AMD ROCm (Linux では `--device cuda` で動作) / CPU
 
-### 🎼 5. AI コード解析 & リードシート (`bin/analyze-chords.py`)
+### ⚡ 5. チャンク分割 (`bin/make-stem-chunks.py`) — 即時再生の中核
+- **サンプル整列チャンク**: 全ステムを同一 PCM サンプル境界で 30 秒ごとにカットし Opus 128k でエンコード (`stems/chunks/<stem>/00000.opus, ...` + `chunks.json`)。チャンク i の開始位置は全ステムで厳密に一致し、シームレス接続の前提を保証
+- **自動再構成**: ソースステムの指紋 (ファイル名/サイズ/mtime) をマニフェストに記録。再分離でステムが変わると次回同期時に自動でチャンク再生成
+- **検証済み**: Chromium は Opus の pre-skip を正しくトリムし、チャンクは 30.000 秒ちょうどでデコードされる (実機検証)。デコード ~150ms/チャンク、FLAC 比で容量 1/4
+
+### 🎼 6. AI コード解析 & リードシート (`bin/analyze-chords.py`)
 - **ステム活用のニューラルコード推定**: BTC Transformer (ISMIR19, 170クラス大語彙モデル) で bass + other ステムから高精度にコードを推定 (ボーカルのフォルマント/ビブラートやシンバルノイズを排除)
 - **スラッシュコード検出**: bass ステムの低音 (C1-C3) クロマから転回形 (例: `G#/B`) を検出
 - **音楽理論ポストプロセッサ**: ドミナント モーション (V7→I)、II-V-I ケイデンス検出・ラベリング、非和声音的な一過性グリッチの除去
@@ -44,8 +51,9 @@
 - **検証済み BPM オーバーライド**: 公式 BPM が判明している曲は `BPM_OVERRIDES` (スクリプト内定数) で確定可能
 - **リードシートビューア** (Web プレイヤー統合): 4小節/段の楽譜レイアウト、再生位置連動ハイライト・自動スクロール、クリックシーク、**ダイアトニック配色** (キー内コード=青 / 借用コード=ローズ) とローマ数字度数表示、ピッチシフター連動の移調表示
 
-### 📱 6. Android デプロイ & 同期 (`bin/sync.ps1`)
-- ADB 経由での Android タブレット/スマホへの APK インストール & `songs/` 音源の自動同期
+### 📱 7. Android デプロイ & 同期 (`bin/sync.ps1`)
+- APK ビルド & インストール、および `songs/`・`setlists/` の端末への同期
+- **同期時にチャンク自動生成** (`make-stem-chunks.py` を冪等実行)。チャンクが存在する曲は**全ファイル ステムを端末に転送しない** (チャンクが再生を代替、曲あたり ~140MB → ~20MB)。チャンク未生成の曲は全ファイル ステムをフォールバックとして転送
 
 ---
 
@@ -54,11 +62,14 @@
 ```text
 mybandpractice/
 ├── bin/
-│   ├── yt-to-mp3.py        # 音量ノーマライズ付き MP3 抽出スクリプト
-│   ├── separate-stems.py   # 4 ステム分離 (BS-RoFormer)
-│   ├── analyze-chords.py   # ステム活用 AI コード解析 (BTC Transformer)
-│   ├── fetch-lyrics.py     # config.yaml 駆動の歌詞フェッチャー
-│   └── sync.ps1            # Android 実機デプロイ & 音源同期スクリプト
+│   ├── yt-to-mp3.py          # 音量ノーマライズ付き音源取得 (YouTube -> mp3)
+│   ├── fetch-lyrics.py       # config.yaml 駆動の歌詞フェッチャー
+│   ├── separate-stems.py     # 4 ステム分離 (BS-RoFormer + SCNet アンサンブル, FLAC 出力)
+│   ├── analyze-chords.py     # ステム活用 AI コード解析 (BTC Transformer)
+│   ├── make-stem-chunks.py   # 30 秒サンプル整列 Opus チャンク生成 (即時再生用)
+│   ├── convert-audio.py      # main/stems の一括トランスコード (ogg/flac/mp3)
+│   ├── mbp.py                # bin/ 共通ヘルパー (ffmpeg/ffprobe, 曲走査, 指紋)
+│   └── sync.ps1              # Android 実機デプロイ & 音源同期 (チャンク自動生成)
 ├── config.example.yaml     # 歌詞フェッチャー等の設定テンプレート
 ├── pyproject.toml          # uv による Python 環境定義 (torch XPU ビルド)
 ├── tools/btc/              # BTC-ISMIR19 クローン (初回実行時に自動クローン, Git除外)
@@ -66,13 +77,16 @@ mybandpractice/
 ├── models/                 # 分離モデルのチェックポイント (Git除外)
 ├── songs/                  # ローカル音源・歌詞ストレージ (Git除外)
 │   └── <song-slug>/
-│       ├── <song-slug>.mp3
-│       ├── stems/          # vocals / drums / bass / other の mp3
+│       ├── <song-slug>.mp3        # 本体音源 (ノーマライズ済み)
+│       ├── stems/                 # ステムマスター (FLAC, PC アーカイブ用)
+│       │   └── chunks/            # 30 秒 Opus チャンク + chunks.json (端末再生用)
 │       ├── chords.json     # コード解析結果 (キー/BPM/小節/ケイデンス)
 │       ├── meta.json
 │       └── lyrics.md
 └── web/                    # React + Vite + TypeScript プレイヤー Web アプリ
 ```
+
+> ストレージ思想: **PC は品質マスター (FLAC ステム)、端末は軽量チャンク (Opus 128k)**。チャンクは同期時に自動生成されるため手動管理は不要です。
 
 ---
 
@@ -165,7 +179,7 @@ uv run python bin/yt-to-mp3.py "https://www.youtube.com/watch?v=XXXXX" -y --stem
 
 ### 4. ステム分離 (`separate-stems.py`)
 
-[Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) のモデル群で既存曲を vocals / drums / bass / other に分離し `songs/<slug>/stems/<stem>.mp3` (192k) に保存します。
+[Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) のモデル群で既存曲を vocals / drums / bass / other に分離します。**デフォルト出力はロスレス FLAC** (`songs/<slug>/stems/<stem>.flac`)。端末向けの軽量化はチャンク生成時に Opus へトランスコードされるため、ここの品質が最終再生品質のマスターになります。
 
 #### パイプライン
 
@@ -221,7 +235,8 @@ uv run python bin/separate-stems.py <song-slug> --single bs_roformer_4stem --dev
 | `--type ALGO` | `avg_wave` | アンサンブル合成アルゴリズム (`median_wave`, `min_fft`, `max_fft` 等) |
 | `--device` | 自動 | `cuda` / `xpu` / `cpu`。自動は cuda > cpu のみ (xpu は明示指定が必要)。AMD GPU (ROCm) は Linux では ROCm ビルドの torch が `cuda` API として公開されるため `cuda` 指定で動作 |
 | `--batch-size` | XPU: 1 / 他: 4 | 推論バッチサイズ |
-| `--bitrate` | `192k` | ステム mp3 のビットレート |
+| `--bitrate` | `192k` | ステム mp3 のビットレート (`--format mp3` 時のみ) |
+| `--format` | `flac` | 出力形式 (`flac` / `mp3`) |
 
 モデル構成は `bin/separate-stems.py` 内の `ENSEMBLE_MODELS` 定数として定義されています (public なチェックポイントのため config 化は不要)。処理時間・realtime factor は `meta.json` の `stems.models` にモデル単位で記録されます。
 
@@ -286,7 +301,7 @@ Get-ChildItem songs -Directory | ForEach-Object { uv run python bin/analyze-chor
 
 ### 7. Android 実機へのデプロイ (`sync.ps1`)
 
-APK ビルド & インストール、および `songs/`・`setlists/` の端末への同期を行います。
+APK ビルド & インストール、および `songs/`・`setlists/` の端末への同期を行います。**songs 同期時は `make-stem-chunks.py` が自動実行**され (変更のあった曲のみ再生成)、チャンクが存在する曲は全ファイル ステムを転送せずチャンクのみを配置します。
 
 ```powershell
 # 対話モード: app / songs / both を選択 (Enter で both)
@@ -303,6 +318,23 @@ APK ビルド & インストール、および `songs/`・`setlists/` の端末�
 ```
 
 事前に USB デバッグ有効な端末の接続と、`adb` (Android platform-tools) が必要です。音源は端末の `Android/data/com.donoy.mybandpractice/files/` 以下に配置されます。
+
+チャンクの手動再生成 (コーデック/チャンク長の変更など):
+
+```powershell
+# 全曲を 30 秒 Opus 128k で再生成
+uv run python bin/make-stem-chunks.py --force
+
+# 特定曲だけ、20 秒 Vorbis で
+uv run python bin/make-stem-chunks.py --seconds 20 --codec vorbis <slug>
+```
+
+main / stems の一括トランスコード (`convert-audio.py`):
+
+```powershell
+uv run python bin/convert-audio.py --target all --format ogg   # 全ファイルを Ogg Opus 化
+uv run python bin/convert-audio.py --target stems --format flac # ステムを FLAC に戻す
+```
 
 ---
 

@@ -32,6 +32,12 @@ export type SongSummary = {
   stems?: string[];
   stemUrls?: Record<string, string>;
   stemBaseUrl?: string;
+  /** Pre-split sample-aligned stem chunks for instant playback */
+  chunks?: {
+    chunkSeconds: number;
+    ext?: string;
+    stems: Record<string, { count: number; urlBase: string }>;
+  };
   hasLyrics: boolean;
   sourceUrl?: string;
   lyricist?: string;
@@ -112,6 +118,53 @@ function listSongs(songsDir: string): SongSummary[] {
       }
     }
 
+    // Pre-split sample-aligned chunks (bin/make-stem-chunks.py): served the
+    // same way as on the device — instant playback decodes only the chunk at
+    // the playhead. Whole-file stems above stay as the fallback path.
+    let chunks: SongSummary["chunks"];
+    if (stems && stems.length > 0) {
+      const manifestPath = path.join(stemsDir, "chunks", "chunks.json");
+      if (fs.existsSync(manifestPath)) {
+        try {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
+            chunkSeconds?: number;
+            ext?: string;
+            stems?: Record<string, { count?: number }>;
+          };
+          const ext =
+            typeof manifest.ext === "string" &&
+            ["flac", "opus", "ogg"].includes(manifest.ext)
+              ? manifest.ext
+              : "flac";
+          if (
+            typeof manifest.chunkSeconds === "number" &&
+            manifest.chunkSeconds >= 5 &&
+            manifest.chunkSeconds <= 120 &&
+            manifest.stems
+          ) {
+            const chunkStems: Record<string, { count: number; urlBase: string }> = {};
+            for (const [stemName, info] of Object.entries(manifest.stems)) {
+              if (
+                stems.includes(stemName) &&
+                typeof info.count === "number" &&
+                info.count > 0
+              ) {
+                chunkStems[stemName] = {
+                  count: info.count,
+                  urlBase: `/songs/${encodeURIComponent(slug)}/stems/chunks/${encodeURIComponent(stemName)}`,
+                };
+              }
+            }
+            if (Object.keys(chunkStems).length === stems.length) {
+              chunks = { chunkSeconds: manifest.chunkSeconds, ext, stems: chunkStems };
+            }
+          }
+        } catch {
+          /* malformed chunks manifest — fall back to whole-file stems */
+        }
+      }
+    }
+
     songs.push({
       slug,
       title: meta.title || slug,
@@ -122,6 +175,7 @@ function listSongs(songsDir: string): SongSummary[] {
         : null,
       stems,
       stemUrls,
+      chunks,
       stemBaseUrl: stems
         ? `/songs/${encodeURIComponent(slug)}/stems/`
         : undefined,
@@ -158,6 +212,9 @@ function contentTypeFor(filePath: string): string {
       return "audio/flac";
     case ".mp3":
       return "audio/mpeg";
+    case ".ogg":
+    case ".opus":
+      return "audio/ogg";
     case ".wav":
       return "audio/wav";
     case ".json":

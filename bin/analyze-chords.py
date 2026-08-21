@@ -839,10 +839,20 @@ def analyze_song_chords(
             if cand.exists():
                 audio_file = cand
 
-    bass_file = stems_dir / "bass.mp3"
-    drums_file = stems_dir / "drums.mp3"
-    other_file = stems_dir / "other.mp3"
-    vocals_file = stems_dir / "vocals.mp3"
+    def find_stem(name: str) -> Path | None:
+        """Locate a stem file regardless of source format (flac/mp3/wav)."""
+        if not stems_dir.is_dir():
+            return None
+        for ext in (".flac", ".wav", ".mp3"):
+            cand = stems_dir / f"{name}{ext}"
+            if cand.exists():
+                return cand
+        return None
+
+    bass_file = find_stem("bass") or stems_dir / "bass.flac"
+    drums_file = find_stem("drums") or stems_dir / "drums.flac"
+    other_file = find_stem("other") or stems_dir / "other.flac"
+    vocals_file = find_stem("vocals") or stems_dir / "vocals.flac"
 
     print(f"==> analyzing chords for '{song_dir.name}' with BTC Transformer + Music Theory Engine ...")
     t0 = time.time()
