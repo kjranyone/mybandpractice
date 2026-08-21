@@ -528,14 +528,17 @@ export function useAudioPlayer(songs: SongSummary[]) {
     }
   }, [engine]);
 
-  // Foreground-only smooth UI clock (engine logic lives in the worker ticker)
+  // Foreground-only smooth UI clock (engine logic lives in the worker ticker).
+  // 10 Hz matches the tenths-precision time readout; re-rendering the whole
+  // tree at animation-frame rate kept the Android WebView repainting at 30fps
+  // and stressed hwui's RenderThread until it crashed (SIGSEGV in Skia).
   useEffect(() => {
     let animId = 0;
     let lastTime = 0;
     const uiFrame = () => {
       if (engine.playing) {
         const cur = engine.currentTime;
-        if (Math.abs(cur - lastTime) >= 0.033) {
+        if (Math.abs(cur - lastTime) >= 0.1) {
           lastTime = cur;
           setCurrentTime(cur);
         }
