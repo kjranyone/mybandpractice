@@ -445,10 +445,6 @@ export function PlayerBar({
             <section className="mixer-section mixer-pitch">
               <p className="mixer-section-title">
                 Pitch
-                <span className="mixer-section-hint">
-                  {" "}
-                  — semitones, speed unchanged (adds slight latency)
-                </span>
                 {pitch !== 0 && (
                   <button
                     type="button"
@@ -504,13 +500,7 @@ export function PlayerBar({
             </section>
 
             <section className="mixer-section mixer-speed">
-              <p className="mixer-section-title">
-                Speed
-                <span className="mixer-section-hint">
-                  {" "}
-                  — audio rate, pitch follows
-                </span>
-              </p>
+              <p className="mixer-section-title">Speed</p>
               <SpeedControl
                 rate={playbackRate}
                 disabled={disabled}

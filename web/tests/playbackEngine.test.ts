@@ -42,6 +42,14 @@ class FakeNode {
   stop = vi.fn();
 }
 
+class FakeAudioWorkletNode {
+  parameters = new Map([["ratio", fakeParam()]]);
+  connect = vi.fn((n: FakeNode) => {
+    void n;
+  });
+  disconnect = vi.fn();
+}
+
 class FakeAudioContext {
   static instances: FakeAudioContext[] = [];
   sampleRate = 48000;
@@ -240,6 +248,63 @@ describe("PlaybackEngine", () => {
     expect(engine.pitch).toBe(-12);
     engine.setPitch(3.4);
     expect(engine.pitch).toBe(3);
+  });
+
+  // ----------------------------------------------- pitch-preserving tempo
+
+  /** Stub a real-enough AudioWorkletNode and expose its ratio param. */
+  function setupWorkletEngine() {
+    vi.stubGlobal(
+      "AudioWorkletNode",
+      FakeAudioWorkletNode as unknown as typeof AudioWorkletNode,
+    );
+    const engine = new PlaybackEngine(makeEvents());
+    const ratioParam = () =>
+      (
+        (engine as unknown as {
+          graph: { worklet: FakeAudioWorkletNode };
+        }).graph.worklet.parameters.get("ratio")!
+      );
+    return { engine, ratioParam };
+  }
+
+  it("tempo changes compensate pitch via the worklet (ratio 1/rate)", async () => {
+    const { engine, ratioParam } = setupWorkletEngine();
+    await engine.ensureGraph();
+
+    engine.setPlaybackRate(0.5);
+    expect(ratioParam().setTargetAtTime).toHaveBeenLastCalledWith(
+      2, // 1 / 0.5: net pitch stays at 1
+      expect.any(Number),
+      expect.any(Number),
+    );
+
+    engine.setPlaybackRate(1);
+    expect(ratioParam().setTargetAtTime).toHaveBeenLastCalledWith(
+      1,
+      expect.any(Number),
+      expect.any(Number),
+    );
+  });
+
+  it("worklet ratio combines user pitch with tempo compensation", async () => {
+    const { engine, ratioParam } = setupWorkletEngine();
+    engine.pitch = 2;
+    engine.playbackRate = 1.25;
+    await engine.ensureGraph(); // persisted settings apply at graph init
+
+    expect(ratioParam().setTargetAtTime).toHaveBeenLastCalledWith(
+      2 ** (2 / 12) / 1.25,
+      expect.any(Number),
+      expect.any(Number),
+    );
+
+    engine.setPitch(-12);
+    expect(ratioParam().setTargetAtTime).toHaveBeenLastCalledWith(
+      0.5 / 1.25,
+      expect.any(Number),
+      expect.any(Number),
+    );
   });
 
   it("getOrCreateChunked builds chunk state from manifest", () => {

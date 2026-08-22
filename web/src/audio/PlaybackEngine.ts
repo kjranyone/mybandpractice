@@ -266,36 +266,72 @@ export class PlaybackEngine {
           stemGains,
         };
         this.routeStemGains();
+        // Persisted pitch/rate (seeded before graph init) take effect here —
+        // the worklet node is born at ratio 1.
+        this.applyWorkletRatio();
         return ctx;
       })();
     }
     return this.graphInit;
   }
 
+  /** Varispeed active: AudioBufferSourceNode shifts pitch by playbackRate,
+   * so the worklet must compensate (ratio 1/rate) to keep tempo changes
+   * pitch-neutral. */
+  private isVarispeed(): boolean {
+    return Math.abs(this.playbackRate - 1) > 1e-4;
+  }
+
+  private needsPitchWorklet(): boolean {
+    return this.pitch !== 0 || this.isVarispeed();
+  }
+
+  /** Route a stem gain: through the worklet whenever it is engaged — zero
+   * shift bypasses it entirely (no JS worklet underrun pops). Drums only
+   * bypass it for pure pitch shifts: a tempo change must compensate every
+   * stem or the kit drifts out of tune with the rest of the band. */
+  private connectStem(stemGain: GainNode, stemName: string) {
+    const g = this.graph;
+    if (!g) return;
+    if (!this.needsPitchWorklet()) {
+      stemGain.connect(g.masterGain);
+    } else if (stemName === "drums" && this.pitch !== 0 && !this.isVarispeed()) {
+      stemGain.connect(g.bypass);
+    } else {
+      stemGain.connect(g.pitchIn);
+    }
+  }
+
+  /** Push the combined worklet ratio: user pitch × varispeed compensation
+   * (net pitch = 2^(semitones/12) even while playbackRate != 1). */
+  private applyWorkletRatio() {
+    const ctx = this.ctx;
+    const node = this.graph?.worklet;
+    if (!ctx || !node) return;
+    node.parameters
+      .get("ratio")
+      ?.setTargetAtTime(
+        2 ** (this.pitch / 12) / this.playbackRate,
+        ctx.currentTime,
+        0.03,
+      );
+  }
+
   private routeStemGains() {
     const g = this.graph;
     if (!g) return;
-    const isPitched = this.pitch !== 0;
+    const engaged = this.needsPitchWorklet();
 
     for (const [name, gain] of g.stemGains) {
       gain.disconnect();
-      if (!isPitched) {
-        // Zero pitch shift: bypass AudioWorklet completely to eliminate JS worklet underrun pops
-        gain.connect(g.masterGain);
-      } else {
-        gain.connect(name === "drums" ? g.bypass : g.pitchIn);
-      }
+      this.connectStem(gain, name);
     }
     g.mixGain.disconnect();
-    if (!isPitched) {
-      g.mixGain.connect(g.masterGain);
-    } else {
-      g.mixGain.connect(g.pitchIn);
-    }
+    g.mixGain.connect(engaged ? g.pitchIn : g.masterGain);
 
     g.postPitchGain.disconnect();
     g.bypassDelay.disconnect();
-    if (isPitched) {
+    if (engaged) {
       g.postPitchGain.connect(g.masterGain);
       g.bypassDelay.connect(g.masterGain);
     }
@@ -703,18 +739,12 @@ export class PlaybackEngine {
       let stemGain = g.stemGains.get(stemName);
       if (!stemGain) {
         const targetLevel = this.stemLevels[stemName] ?? 1;
-        stemGain = ctx.createGain();
-        stemGain.gain.value = targetLevel;
-        g.stemGains.set(stemName, stemGain);
-        stemGain.connect(
-          this.pitch === 0
-            ? g.masterGain
-            : stemName === "drums"
-              ? g.bypass
-              : g.pitchIn,
-        );
-      }
-      const targetLevel = this.stemLevels[stemName] ?? 1;
+          stemGain = ctx.createGain();
+          stemGain.gain.value = targetLevel;
+          g.stemGains.set(stemName, stemGain);
+          this.connectStem(stemGain, stemName);
+        }
+        const targetLevel = this.stemLevels[stemName] ?? 1;
       stemGain.gain.cancelScheduledValues(now);
       stemGain.gain.setValueAtTime(targetLevel, now);
 
@@ -779,13 +809,7 @@ export class PlaybackEngine {
           stemGain = ctx.createGain();
           stemGain.gain.value = targetLevel;
           g.stemGains.set(stemName, stemGain);
-          stemGain.connect(
-            this.pitch === 0
-              ? g.masterGain
-              : stemName === "drums"
-                ? g.bypass
-                : g.pitchIn,
-          );
+          this.connectStem(stemGain, stemName);
         }
         // Anchor exactly at the target level: not a single sample leaks at 1.0.
         stemGain.gain.cancelScheduledValues(now);
@@ -1096,6 +1120,8 @@ export class PlaybackEngine {
 
   setPlaybackRate(r: number) {
     this.playbackRate = clamp(r, 0.25, 2);
+    this.applyWorkletRatio();
+    this.routeStemGains();
     if (this.playing) {
       const curT = this.currentTime;
       this.pausedTime = curT;
@@ -1105,13 +1131,7 @@ export class PlaybackEngine {
 
   setPitch(semitones: number) {
     this.pitch = Math.round(clamp(semitones, -12, 12));
-    const ctx = this.ctx;
-    const node = this.graph?.worklet;
-    if (ctx && node) {
-      node.parameters
-        .get("ratio")
-        ?.setTargetAtTime(2 ** (this.pitch / 12), ctx.currentTime, 0.03);
-    }
+    this.applyWorkletRatio();
     this.routeStemGains();
   }
 
