@@ -1,6 +1,7 @@
 package com.donoy.mybandpractice.v2.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
@@ -185,7 +186,16 @@ fun SyncDialog(model: PracticeModel, onClose: () -> Unit, onImport: () -> Unit) 
             }
             "receive-answer" -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Show this code to the other device", color = Mbp.Text, fontWeight = FontWeight.SemiBold)
-                payload?.let { QrImage(it) } ?: Text("Building the answer code…", color = Mbp.Muted)
+                payload?.let { code ->
+                    QrImage(code)
+                    Chip("Share answer code", false) {
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, code)
+                        }
+                        context.startActivity(Intent.createChooser(share, "Share answer code"))
+                    }
+                } ?: Text("Building the answer code…", color = Mbp.Muted)
             }
             "picking" -> {
                 val data = manifest

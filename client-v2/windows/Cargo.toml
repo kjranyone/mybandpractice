@@ -1,0 +1,27 @@
+[package]
+name = "mbp-windows"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Native Windows practice player for My Band Practice"
+
+[build-dependencies]
+embed-resource = "3"
+
+[target.'cfg(windows)'.dependencies]
+cpal = "0.15"
+anyhow = "1"
+bytes = "1"
+gpui = { version = "0.2.2", default-features = false, features = ["windows-manifest"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+lz-str = "0.2.1"
+mbp-core = { path = "../core" }
+qrcode = { version = "0.14", default-features = false }
+rand = "0.9"
+rqrr = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time", "fs", "io-util"] }
+webrtc = "0.14"

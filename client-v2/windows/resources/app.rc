@@ -1,0 +1,2 @@
+// GPUI uses icon resource 1 for the Windows window class.
+1 ICON "resources/app.ico"

@@ -152,8 +152,8 @@ impl Song {
                     slice.resize(chunk_frames * CHANNELS, 0.0);
                 }
                 let mut owned_frames = slice.len() / CHANNELS;
-                if let Some(prev) = song.cloned_samples(si, idx.wrapping_sub(1)) {
-                    smooth_chunk_edges(&mut slice, CHANNELS, Some(&prev), None);
+                if let Some(prev) = song.chunk(si, idx.wrapping_sub(1)) {
+                    smooth_chunk_edges(&mut slice, CHANNELS, Some(&prev.samples), None);
                 }
                 if is_last && owned_frames > chunk_frames {
                     slice.truncate(chunk_frames * CHANNELS);
@@ -203,7 +203,7 @@ impl Song {
     }
 
     pub fn decode_chunk(&self, idx: u32) -> Result<(), CoreError> {
-        if idx >= self.chunk_count {
+        if idx >= self.chunk_count || self.ready(idx) {
             return Ok(());
         }
         let _guard = self.decode_lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -230,14 +230,15 @@ impl Song {
                 )));
             }
             let chunk = fit_chunk(decoded.stereo, is_last, self.chunk_frames)?;
-            let prev = if idx > 0 {
-                self.cloned_samples(si, idx - 1)
-            } else {
-                None
-            };
-            let next = self.cloned_samples(si, idx + 1);
+            let prev = idx.checked_sub(1).and_then(|index| self.chunk(si, index));
+            let next = self.chunk(si, idx + 1);
             let mut samples = chunk.samples;
-            smooth_chunk_edges(&mut samples, CHANNELS, prev.as_deref(), next.as_deref());
+            smooth_chunk_edges(
+                &mut samples,
+                CHANNELS,
+                prev.as_ref().map(|chunk| chunk.samples.as_slice()),
+                next.as_ref().map(|chunk| chunk.samples.as_slice()),
+            );
             let frames = samples.len() / CHANNELS;
             *self.pcm[si][idx as usize]
                 .lock()
@@ -249,9 +250,16 @@ impl Song {
         Ok(())
     }
 
-    fn cloned_samples(&self, stem_index: usize, idx: u32) -> Option<Vec<f32>> {
-        let chunk = self.chunk(stem_index, idx)?;
-        Some(chunk.samples.clone())
+    pub fn cached_pcm_bytes(&self) -> usize {
+        self.pcm
+            .iter()
+            .flatten()
+            .filter_map(|slot| {
+                let slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+                slot.as_ref()
+                    .map(|chunk| chunk.samples.capacity() * size_of::<f32>())
+            })
+            .sum()
     }
 
     fn recompute_duration(&self) {

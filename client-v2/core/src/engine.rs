@@ -236,6 +236,14 @@ impl Engine {
             .unwrap_or(0.0)
     }
 
+    pub fn stem_names(&self) -> Vec<String> {
+        self.song().map_or_else(Vec::new, |song| song.stems.clone())
+    }
+
+    pub fn cached_pcm_bytes(&self) -> usize {
+        self.song().map_or(0, |song| song.cached_pcm_bytes())
+    }
+
     pub fn master_gain(&self) -> f32 {
         self.transport().master.target
     }
@@ -366,12 +374,11 @@ impl Engine {
                 transport.ended = true;
                 break;
             }
-            let names = song.stems.clone();
             for frame in 0..n {
                 let master = advance(&mut transport.master, ramp_samples);
                 let mut left = 0.0f32;
                 let mut right = 0.0f32;
-                for (si, name) in names.iter().enumerate() {
+                for (si, name) in song.stems.iter().enumerate() {
                     let gain = transport
                         .gains
                         .get_mut(name)
@@ -455,7 +462,6 @@ fn render_shaped(
     let ratio = 2.0_f64.powf(transport.pitch as f64 / 12.0) / transport.rate;
     let drums_dry = transport.pitch != 0 && (transport.rate - 1.0).abs() <= 1e-4;
     let drum_at = song.stems.iter().position(|name| name == "drums");
-    let names = song.stems.clone();
     let mut cursor = transport.position as f64 + transport.pos_frac;
     let mut wrote = 0usize;
     let lead = (song.sample_rate as f64 * PREFETCH_LEAD_SECONDS) as u64;
@@ -471,9 +477,16 @@ fn render_shaped(
         let frac = (cursor - frame as f64) as f32;
         let next = frame.saturating_add(1);
         let need_next = frac > 1.0e-5 && next < duration;
-        if !frames_ready(song, frame) || (need_next && !frames_ready(song, next)) {
+        let missing_frame = if !frames_ready(song, frame) {
+            Some(frame)
+        } else if need_next && !frames_ready(song, next) {
+            Some(next)
+        } else {
+            None
+        };
+        if let Some(missing) = missing_frame {
             transport.buffering = true;
-            let idx = (frame / chunk_frames) as u32;
+            let idx = (missing / chunk_frames) as u32;
             song.wanted.store(idx, Ordering::Relaxed);
             prefetch.unpark();
             break;
@@ -484,7 +497,7 @@ fn render_shaped(
         let mut wet_r = 0.0f32;
         let mut dry_l = 0.0f32;
         let mut dry_r = 0.0f32;
-        for (si, name) in names.iter().enumerate() {
+        for (si, name) in song.stems.iter().enumerate() {
             let (a_l, a_r) = read_frame(song, si, frame);
             let (b_l, b_r) = if need_next {
                 read_frame(song, si, next)

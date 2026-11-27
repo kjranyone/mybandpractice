@@ -47,6 +47,7 @@ class SyncSession(
     private val main = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val closed = AtomicBoolean(false)
+    private val transferComplete = AtomicBoolean(false)
     private val gathered = ArrayList<String>()
     private val iceDone = CompletableDeferred<Unit>()
     private val channelOpen = CompletableDeferred<Unit>()
@@ -263,7 +264,7 @@ class SyncSession(
                 val ok = msg.optBoolean("ok")
                 acks.remove(id)?.complete(ok)
             }
-            "done" -> emit(SyncEvent.Complete)
+            "done" -> completeTransfer()
             "error" -> fail(msg.optString("message").ifBlank { "Sync failed" })
         }
     }
@@ -400,7 +401,7 @@ class SyncSession(
                 id++
             }
             sendJson(JSONObject().put("type", "done"))
-            emit(SyncEvent.Complete)
+            completeTransfer()
         } catch (err: kotlinx.coroutines.CancellationException) {
             throw err
         } catch (err: Throwable) {
@@ -443,6 +444,7 @@ class SyncSession(
     }
 
     private fun fail(message: String) {
+        if (transferComplete.get()) return
         if (!closed.compareAndSet(false, true)) return
         main.post { onEvent(SyncEvent.Failed(message)) }
         scope.cancel()
@@ -453,6 +455,10 @@ class SyncSession(
             dc = null
             pc = null
         }
+    }
+
+    private fun completeTransfer() {
+        if (transferComplete.compareAndSet(false, true)) emit(SyncEvent.Complete)
     }
 
     private class Incoming(

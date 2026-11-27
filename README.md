@@ -99,12 +99,37 @@ mybandpractice/
 
 ## 🖥️ 対応プラットフォーム
 
-- **動作確認済み**: Windows (Chrome/Edge), Android (Capacitor ビルド)
+- **動作確認済み**: Windows (Chrome/Edge、GPUI ネイティブ版), Android (Capacitor ビルド)
 - **未対応・未検証**: iOS / macOS — Capacitor の iOS 足場 (`npx cap add ios`) から整備が必要です。Web Audio は AudioWorklet / DynamicsCompressor など Safari 互換 API のみを使用しているため、検証報告や PR を歓迎します (コントリビュートの際はスクリーンショット・機種・iOS/Safari バージョンの添付にご協力ください)。
 
 ---
 
 ## 📦 セットアップ & 使い方
+
+### Windows ネイティブ版 (GPUI)
+
+Rust の MSVC ツールチェーンと、Visual Studio Build Tools の「C++ によるデスクトップ開発」が必要です。リポジトリのルートで実行します。
+
+```powershell
+.\dev.ps1
+```
+
+起動時にリポジトリの `songs` を読み込みます。別のライブラリで起動するには `.\dev.ps1 -Library "D:\Music\songs"`、リリースビルドで起動するには `.\dev.ps1 -Release` を使います。サイドバーのライブラリ名から現在のフォルダーを確認でき、`Change folder…` で変更できます。
+
+スペースで再生・一時停止、左右キーで 5 秒ずつシークします。曲全体の波形をクリック、またはドラッグして再生位置を変更できます。ミキサーの音量％表示をクリックすると、そのフェーダーが 100% に戻ります。
+
+- 選曲を変えると、次の曲を先頭から開きます。再生・一時停止の状態、速度、移調、音量と共通ステムのミックス設定は引き継がれます。
+- 歌詞とコード表は `lyrics.md` と `chords.json` を読み込みます。曲名をクリックすると拡大表示でき、コードをクリックするとその位置へシークします。コード表の表示は移調に連動します。
+- `Playlists` の専用画面でセットリストを選ぶと、最後の曲まで連続再生します。`In order` と `Shuffle` で再生順を切り替えられます。セットリストは `setlists/*.json` を使い、画面から作成、曲の追加・削除、並べ替えができます。
+- ミキサーの L/R メーターは出力のピークを示します。`Comp` でコンプレッサーを切り替えられます。`Lim` はピークリミッターがゲインを下げているときに減衰量を表示します。
+- サイドバーのアプリアイコンまたは名前をクリックすると、バージョン、著作権、ライセンス、主要ライブラリを確認できます。
+- 同じ Wi-Fi 上で `Sync to other device` を開き、受信側の `Sync → Receive` で Windows に表示された QR を読み取ります。受信側に表示された応答 QR の画像を Windows で開くか、応答コードを貼り付けます。転送する曲とセットリストは受信側で選びます。
+
+実行ファイルを作るには、次のコマンドを使います。出力先は `client-v2\target\release\mbp-windows.exe` です。
+
+```powershell
+cargo build --release --locked --manifest-path client-v2/Cargo.toml -p mbp-windows
+```
 
 ### 1. リポジトリのクローン & 初期設定
 
