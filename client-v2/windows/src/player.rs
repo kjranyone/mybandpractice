@@ -62,6 +62,7 @@ pub struct Player {
     pub playlist_edit: bool,
     pub playlist_add: bool,
     pub shuffle: bool,
+    pub repeat_one: bool,
     pub active: Option<SongEntry>,
     pub selection: Option<Selection>,
     pub lyrics: Vec<LyricsBlock>,
@@ -118,6 +119,7 @@ pub enum Command {
     EditPlaylistSong(usize, i32),
     TrackStep(i32),
     Shuffle,
+    ToggleRepeatOne,
     TogglePlayback,
     Skip(f64),
     Seek(f64),
@@ -156,6 +158,7 @@ impl Player {
             playlist_edit: false,
             playlist_add: false,
             shuffle: false,
+            repeat_one: false,
             active: None,
             selection: None,
             lyrics: Vec::new(),
@@ -216,6 +219,7 @@ impl Player {
                     if !ended
                         && player.transport.ended
                         && player.playlist.is_some()
+                        && !player.repeat_one
                         && player.selection.is_none()
                     {
                         player.step_track(1, true, cx);
@@ -772,6 +776,7 @@ impl Player {
         engine.set_master_gain(self.master);
         engine.set_playback_rate(self.rate);
         engine.set_pitch(self.pitch);
+        engine.set_repeat_one(self.repeat_one);
         apply_mix(&mut engine, &self.tracks, self.solo);
         if playing && self.output.is_some() {
             engine.play();
@@ -972,6 +977,10 @@ impl Player {
                 self.compressor = !self.compressor;
                 state.compressor = self.compressor;
             }
+            Command::ToggleRepeatOne => {
+                self.repeat_one = !self.repeat_one;
+                state.engine.set_repeat_one(self.repeat_one);
+            }
             Command::SetGain(index, gain) => {
                 self.tracks[index].gain = gain.clamp(0.0, MAX_GAIN);
                 let track = &self.tracks[index];
@@ -981,12 +990,22 @@ impl Player {
             Command::Mute(index) => {
                 let track = &mut self.tracks[index];
                 track.muted = !track.muted;
+                if track.muted && self.solo == Some(index) {
+                    self.solo = None;
+                    self.solo_name = None;
+                }
                 self.track_settings
                     .insert(track.name.clone(), (track.gain, track.muted));
             }
             Command::Solo(index) => {
                 self.solo = (self.solo != Some(index)).then_some(index);
-                self.solo_name = self.solo.map(|index| self.tracks[index].name.clone());
+                self.solo_name = self.solo.map(|index| {
+                    let track = &mut self.tracks[index];
+                    track.muted = false;
+                    self.track_settings
+                        .insert(track.name.clone(), (track.gain, false));
+                    track.name.clone()
+                });
             }
             _ => (),
         }

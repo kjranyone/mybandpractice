@@ -1028,7 +1028,15 @@ impl Player {
                                         false,
                                         cx,
                                     ))
-                                }),
+                                })
+                                .child(button(
+                                    "repeat-one",
+                                    "Repeat 1",
+                                    Command::ToggleRepeatOne,
+                                    ready,
+                                    self.repeat_one,
+                                    cx,
+                                )),
                         )
                         .child(
                             row()

@@ -40,6 +40,7 @@ struct Transport {
     /// Semitones. Heard pitch is `2^(pitch/12)` and does not follow `rate`.
     pitch: i32,
     playing: bool,
+    repeat_one: bool,
     buffering: bool,
     ended: bool,
     gains: HashMap<String, StemGain>,
@@ -61,6 +62,7 @@ impl Transport {
             rate: 1.0,
             pitch: 0,
             playing: false,
+            repeat_one: false,
             buffering: false,
             ended: false,
             gains,
@@ -155,6 +157,10 @@ impl Engine {
 
     pub fn pause(&mut self) {
         self.transport().playing = false;
+    }
+
+    pub fn set_repeat_one(&mut self, repeat: bool) {
+        self.transport().repeat_one = repeat;
     }
 
     pub fn seek(&mut self, seconds: f64) -> Result<(), CoreError> {
@@ -322,16 +328,21 @@ impl Engine {
         let frames = out.len() / channels;
         let chunk_frames = song.chunk_frames as u64;
         let duration = song.duration_frames();
+        let repeat_one = transport.repeat_one && duration > 0;
         let ramp_samples = (song.sample_rate as f64 * RAMP_SECONDS).max(1.0) as f32;
         let lead = (song.sample_rate as f64 * PREFETCH_LEAD_SECONDS) as u64;
 
         let mut wrote = 0usize;
         while wrote < frames {
             if transport.position >= duration {
-                transport.playing = false;
-                transport.ended = true;
-                transport.position = duration;
-                break;
+                if repeat_one {
+                    transport.position = 0;
+                } else {
+                    transport.playing = false;
+                    transport.ended = true;
+                    transport.position = duration;
+                    break;
+                }
             }
             let idx = (transport.position / chunk_frames) as u32;
             if idx >= song.chunk_count {
@@ -457,12 +468,16 @@ fn render_shaped(
     }
     let chunk_frames = song.chunk_frames as u64;
     let duration = song.duration_frames();
+    let repeat_one = transport.repeat_one && duration > 0;
     let ramp_samples = (song.sample_rate as f64 * RAMP_SECONDS).max(1.0) as f32;
     let step = transport.rate;
     let ratio = 2.0_f64.powf(transport.pitch as f64 / 12.0) / transport.rate;
     let drums_dry = transport.pitch != 0 && (transport.rate - 1.0).abs() <= 1e-4;
     let drum_at = song.stems.iter().position(|name| name == "drums");
     let mut cursor = transport.position as f64 + transport.pos_frac;
+    if repeat_one && cursor >= duration as f64 {
+        cursor %= duration as f64;
+    }
     let mut wrote = 0usize;
     let lead = (song.sample_rate as f64 * PREFETCH_LEAD_SECONDS) as u64;
 
@@ -475,7 +490,12 @@ fn render_shaped(
         }
         let frame = cursor.floor() as u64;
         let frac = (cursor - frame as f64) as f32;
-        let next = frame.saturating_add(1);
+        let next = frame + 1;
+        let next = if repeat_one && next == duration {
+            0
+        } else {
+            next
+        };
         let need_next = frac > 1.0e-5 && next < duration;
         let missing_frame = if !frames_ready(song, frame) {
             Some(frame)
@@ -530,6 +550,9 @@ fn render_shaped(
         out[o] = shifted_l + delayed_l;
         out[o + 1] = shifted_r + delayed_r;
         cursor += step;
+        if repeat_one && cursor >= duration as f64 {
+            cursor %= duration as f64;
+        }
         wrote += 1;
 
         if wrote % 64 == 0 {
@@ -626,6 +649,58 @@ mod tests {
 
     fn tone(frames: usize, value: f32) -> Vec<f32> {
         vec![value; frames * 2]
+    }
+
+    #[test]
+    fn repeat_one_wraps_within_a_render_buffer_and_can_be_disabled() {
+        let mut engine = Engine::new();
+        engine
+            .load_synthetic(
+                48_000,
+                3,
+                vec![("vocals".into(), vec![0.1, 0.1, 0.2, 0.2, 0.3, 0.3])],
+            )
+            .unwrap();
+        engine.seek(2.0 / 48_000.0).unwrap();
+        engine.set_repeat_one(true);
+        engine.play();
+
+        let mut first = [0.0; 10];
+        engine.render(&mut first);
+        assert_eq!(first, [0.3, 0.3, 0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.1, 0.1]);
+        assert!(engine.is_playing());
+        assert!(!engine.ended());
+
+        engine.set_repeat_one(false);
+        let mut second = [0.0; 8];
+        engine.render(&mut second);
+        assert_eq!(second, [0.2, 0.2, 0.3, 0.3, 0.0, 0.0, 0.0, 0.0]);
+        assert!(engine.ended());
+    }
+
+    #[test]
+    fn repeat_one_keeps_shaped_audio_continuous_and_preserves_fractional_position() {
+        let mut repeated = Engine::new();
+        let mut reference = Engine::new();
+        let length = 4031;
+        for (engine, frames) in [(&mut repeated, length), (&mut reference, length * 3)] {
+            engine
+                .load_synthetic(48_000, frames, vec![("vocals".into(), tone(frames, 0.4))])
+                .unwrap();
+            engine.set_playback_rate(1.5);
+            engine.set_pitch(2);
+            engine.play();
+        }
+        repeated.set_repeat_one(true);
+        let mut output = vec![0.0; 12_002];
+        let mut expected = vec![0.0; output.len()];
+        repeated.render(&mut output);
+        reference.render(&mut expected);
+        assert_eq!(output, expected);
+        let source_frame = (6001.0 * 1.5) % length as f64;
+        assert!((repeated.position() * 48_000.0 - source_frame).abs() < 1e-8);
+        assert!(repeated.is_playing());
+        assert!(!repeated.ended());
     }
 
     #[test]
