@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -36,22 +38,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import com.donoy.mybandpractice.v2.MIN_LOOP
+import com.donoy.mybandpractice.v2.PlaybackMode
 import com.donoy.mybandpractice.v2.PracticeModel
 import com.donoy.mybandpractice.v2.formatGain
 import com.donoy.mybandpractice.v2.formatTimePrecise
@@ -60,7 +71,22 @@ import com.donoy.mybandpractice.v2.syntheticPeaks
 import com.donoy.mybandpractice.v2.toLeadSheetNotation
 import com.donoy.mybandpractice.v2.transposeChord
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
+
+/** Mono characters the chord readout reserves, from the longest common lead-sheet symbol. */
+private const val CHORD_SLOT = 8
+
+/** Diameter of the play and repeat keys. */
+private val TransportKey = 46.dp
+
+/** Horizontal padding inside the mixer chip, and the gap between its cells. */
+private val ChipPad = 10.dp
+private val ChipGap = 4.dp
+
+/** Room the compact transport needs beside the mixer chip: both keys, their padding, and a little air. */
+private val CompactTransportMin = TransportKey * 2 + 18.dp
 
 @Composable
 fun PlayerDeck(
@@ -83,10 +109,23 @@ fun PlayerDeck(
     ) {
         Waveform(model, disabled)
         if (compact) {
-            Info(model)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Transport(model, disabled, showSkips = false, modifier = Modifier.weight(1f))
-                DeckSide(model, chordSheetOpen, onToggleChordSheet, onOpenMixer, mixerOpen, disabled)
+            Info(model, chordSheetOpen, onToggleChordSheet, disabled, Modifier.fillMaxWidth())
+            // The keys share a line with the chip while they fit. Larger fonts stack the chip
+            // below it instead of letting it grow over a key.
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                if (maxWidth >= CompactTransportMin + chipCells().width) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Transport(model, disabled, showSkips = false, modifier = Modifier.weight(1f))
+                        MixerChip(model, mixerOpen, onOpenMixer)
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Transport(model, disabled, showSkips = false, modifier = Modifier.fillMaxWidth())
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            MixerChip(model, mixerOpen, onOpenMixer)
+                        }
+                    }
+                }
             }
             LoopStrip(model, disabled, Modifier.fillMaxWidth())
         } else {
@@ -94,30 +133,40 @@ fun PlayerDeck(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Info(model, Modifier.weight(1f))
+                Info(model, chordSheetOpen, onToggleChordSheet, disabled, Modifier.weight(1f))
                 Transport(model, disabled, showSkips = true)
                 LoopStrip(model, disabled, Modifier.weight(1.4f))
-                DeckSide(model, chordSheetOpen, onToggleChordSheet, onOpenMixer, mixerOpen, disabled)
+                MixerChip(model, mixerOpen, onOpenMixer)
             }
         }
     }
 }
 
+/** Title row. The chord readout sits at its end, so it never borders the transport. */
 @Composable
-private fun Info(model: PracticeModel, modifier: Modifier = Modifier) {
+private fun Info(
+    model: PracticeModel,
+    chordSheetOpen: Boolean,
+    onToggleChordSheet: () -> Unit,
+    disabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val song = model.current
-    Column(modifier) {
-        Text(
-            song?.title ?: "Nothing selected",
-            color = if (song == null) Mbp.Faint else Mbp.Text,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = Mbp.type.body,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (song != null) {
-            Text(song.artist, color = Mbp.Muted, fontSize = Mbp.type.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                song?.title ?: "Nothing selected",
+                color = if (song == null) Mbp.Faint else Mbp.Text,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = Mbp.type.body,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (song != null) {
+                Text(song.artist, color = Mbp.Muted, fontSize = Mbp.type.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
+        ChordReadout(model, chordSheetOpen, onToggleChordSheet, disabled)
     }
 }
 
@@ -292,7 +341,7 @@ private fun Transport(model: PracticeModel, disabled: Boolean, showSkips: Boolea
         Box(
             modifier = Modifier
                 .padding(horizontal = 4.dp)
-                .size(46.dp)
+                .size(TransportKey)
                 .clip(CircleShape)
                 .background(Mbp.Text)
                 .alpha(if (disabled) 0.35f else 1f)
@@ -327,9 +376,74 @@ private fun Transport(model: PracticeModel, disabled: Boolean, showSkips: Boolea
             SkipButton("+5") { model.skip(5.0) }
             IconButton("⏭", !disabled, 34) { model.playNext() }
         }
-        val active = model.playbackMode != com.donoy.mybandpractice.v2.PlaybackMode.Sequential
-        IconButton(if (model.playbackMode == com.donoy.mybandpractice.v2.PlaybackMode.RepeatOne) "1↻" else "↻", model.current != null, 34, if (active) Mbp.Sc else Mbp.Muted) {
-            model.cycleMode()
+        RepeatKey(model.playbackMode, model.current != null, Modifier.padding(start = 6.dp)) { model.cycleMode() }
+    }
+}
+
+/**
+ * Playback-mode key. It is built like the play key, a filled circle with a drawn glyph, so
+ * it never depends on a font carrying "↻". Sequential keeps the play key's fill; Repeat All
+ * and Repeat One turn it orange, and Repeat One adds a "1".
+ */
+@Composable
+private fun RepeatKey(mode: PlaybackMode, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier = modifier
+            .size(TransportKey)
+            .clip(CircleShape)
+            .background(if (mode == PlaybackMode.Sequential) Mbp.Text else Mbp.Sc)
+            .alpha(if (enabled) 1f else 0.35f)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(22.dp)) {
+            val ink = Mbp.Bg
+            val c = center
+            val r = size.minDimension / 2f - 3.dp.toPx()
+            fun ring(degrees: Double) = Offset(
+                c.x + (r * cos(Math.toRadians(degrees))).toFloat(),
+                c.y + (r * sin(Math.toRadians(degrees))).toFloat(),
+            )
+            fun inner(x: Dp, y: Dp) = Offset(c.x + x.toPx(), c.y + y.toPx())
+
+            // Nearly a full turn, open at the top right where the arrowhead takes over.
+            drawArc(
+                color = ink,
+                startAngle = 305f,
+                sweepAngle = 290f,
+                useCenter = false,
+                topLeft = Offset(c.x - r, c.y - r),
+                size = Size(r * 2f, r * 2f),
+                style = Stroke(2.dp.toPx(), cap = StrokeCap.Round),
+            )
+            val base = ring(300.0)
+            val along = Offset(0.866f, 0.5f)
+            val across = Offset(-0.5f, 0.866f)
+            val reach = 5.5.dp.toPx()
+            val spread = 3.6.dp.toPx()
+            drawPath(
+                Path().apply {
+                    moveTo(base.x - across.x * spread, base.y - across.y * spread)
+                    lineTo(base.x + along.x * reach, base.y + along.y * reach)
+                    lineTo(base.x + across.x * spread, base.y + across.y * spread)
+                    close()
+                },
+                ink,
+            )
+            if (mode == PlaybackMode.RepeatOne) {
+                val flag = inner((-2.4).dp, (-3.4).dp)
+                val top = inner((-0.3).dp, (-5.4).dp)
+                val foot = inner((-0.3).dp, 5.4.dp)
+                drawPath(
+                    Path().apply {
+                        moveTo(flag.x, flag.y)
+                        lineTo(top.x, top.y)
+                        lineTo(foot.x, foot.y)
+                    },
+                    ink,
+                    style = Stroke(1.9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+                )
+            }
         }
     }
 }
@@ -450,21 +564,26 @@ private fun LoopKey(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (show == LoopKind.Active) {
-                Box(Modifier.size(6.dp).background(androidx.compose.ui.graphics.Color(0xFF1A1200), CircleShape))
-            }
-            Text(
-                label.uppercase(),
-                color = labelColor,
-                fontSize = Mbp.type.caption,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.04.em,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            label.uppercase(),
+            color = labelColor,
+            fontSize = Mbp.type.caption,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.04.em,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            // Drawn beside the label rather than laid out with it, so toggling never nudges it.
+            modifier = Modifier.drawBehind {
+                if (show == LoopKind.Active) {
+                    drawCircle(
+                        color = androidx.compose.ui.graphics.Color(0xFF1A1200),
+                        radius = 3.dp.toPx(),
+                        center = Offset(-9.dp.toPx(), size.height / 2f),
+                    )
+                }
+            },
+        )
         Text(
             hint,
             color = hintColor,
@@ -477,38 +596,40 @@ private fun LoopKey(
     }
 }
 
+/** Fixed slot, so a changing chord never resizes the deck. */
 @Composable
-private fun DeckSide(
+private fun ChordReadout(
     model: PracticeModel,
     chordSheetOpen: Boolean,
     onToggleChordSheet: () -> Unit,
-    onOpenMixer: () -> Unit,
-    mixerOpen: Boolean,
     disabled: Boolean,
 ) {
     val hit = model.chords?.chords?.firstOrNull { model.position >= it.start && model.position < it.end }
     val shown = hit?.let { toLeadSheetNotation(transposeChord(it.chord, model.pitch)) }
     val has = model.chords?.chords?.isNotEmpty() == true
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            shown ?: if (has) "Chord" else "--",
-            color = if (chordSheetOpen || shown != null) Mbp.Accent else Mbp.Muted,
-            fontFamily = Mbp.Mono,
-            fontWeight = FontWeight.Bold,
-            fontSize = Mbp.type.bodySm,
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(if (chordSheetOpen) Mbp.AccentDim else Mbp.BgElevated)
-                .border(1.dp, if (shown != null) Mbp.Accent else Mbp.BorderStrong, RoundedCornerShape(8.dp))
-                .clickable(enabled = !disabled, onClick = onToggleChordSheet)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-        )
-        MixerChip(model, mixerOpen, onOpenMixer)
-    }
+    Text(
+        shown ?: if (has) "Chord" else "--",
+        color = if (chordSheetOpen || shown != null) Mbp.Accent else Mbp.Muted,
+        fontFamily = Mbp.Mono,
+        fontWeight = FontWeight.Bold,
+        fontSize = Mbp.type.bodySm,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .width(readoutWidth(listOf("0".repeat(CHORD_SLOT)), Mbp.type.bodySm, FontWeight.Bold) + 20.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (chordSheetOpen) Mbp.AccentDim else Mbp.BgElevated)
+            .border(1.dp, if (shown != null) Mbp.Accent else Mbp.BorderStrong, RoundedCornerShape(8.dp))
+            .clickable(enabled = !disabled, onClick = onToggleChordSheet)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    )
 }
 
+/** Every value is a centered fixed-width cell, so the chip never changes size. */
 @Composable
-private fun MixerChip(model: PracticeModel, open: Boolean, onOpen: () -> Unit) {
+private fun MixerChip(model: PracticeModel, open: Boolean, onOpen: () -> Unit, modifier: Modifier = Modifier) {
     val stems = model.current?.stems?.ifEmpty { null } ?: com.donoy.mybandpractice.v2.STEM_ORDER
     val touched = stems.filter { (model.stemGains[it] ?: 1f) < 0.995f }
     val label = when {
@@ -517,41 +638,79 @@ private fun MixerChip(model: PracticeModel, open: Boolean, onOpen: () -> Unit) {
         else -> "${stems.size - touched.size}/${stems.size}"
     }
     val rateOn = abs(model.rate - 1f) >= 0.005f
+    val pitch = model.pitch
+    val cells = chipCells()
     Row(
-        modifier = Modifier
+        modifier = modifier
             .height(38.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (open) Mbp.AccentDim else Mbp.BgElevated)
             .border(1.dp, if (open) Mbp.Accent else Mbp.BorderStrong, RoundedCornerShape(8.dp))
             .clickable(onClick = onOpen)
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = ChipPad),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(ChipGap),
     ) {
-        Text(
-            "${"%.2f".format(model.rate)}×",
-            color = if (rateOn) Mbp.Sc else Mbp.Muted,
-            fontFamily = Mbp.Mono,
-            fontSize = Mbp.type.caption,
-        )
-        if (model.pitch != 0) {
-            Text("·", color = Mbp.Faint, fontSize = Mbp.type.caption)
-            Text(
-                "${if (model.pitch > 0) "+" else ""}${model.pitch}st",
-                color = Mbp.Accent,
-                fontFamily = Mbp.Mono,
-                fontSize = Mbp.type.caption,
-            )
-        }
-        Text("·", color = Mbp.Faint, fontSize = Mbp.type.caption)
-        Text(label, color = if (touched.isEmpty()) Mbp.Muted else Mbp.Sc, fontFamily = Mbp.Mono, fontSize = Mbp.type.caption)
-        Text("·", color = Mbp.Faint, fontSize = Mbp.type.caption)
-        Text(
+        ChipCell("%.2f×".format(model.rate), cells.rate, if (rateOn) Mbp.Sc else Mbp.Muted)
+        ChipCell("·", cells.dot, Mbp.Faint)
+        ChipCell("${if (pitch > 0) "+" else ""}${pitch}st", cells.pitch, if (pitch != 0) Mbp.Accent else Mbp.Muted)
+        ChipCell("·", cells.dot, Mbp.Faint)
+        ChipCell(label, cells.mix, if (touched.isEmpty()) Mbp.Muted else Mbp.Sc)
+        ChipCell("·", cells.dot, Mbp.Faint)
+        ChipCell(
             if (model.muted || model.volume <= 0.001f) "M" else "${(model.volume * 100).roundToInt()}",
-            color = Mbp.Text,
-            fontFamily = Mbp.Mono,
-            fontSize = Mbp.type.caption,
+            cells.volume,
+            Mbp.Text,
         )
+    }
+}
+
+/** Fixed widths of the chip's cells. [width] lets the deck check the chip fits before placing it. */
+private class ChipCells(val rate: Dp, val pitch: Dp, val mix: Dp, val volume: Dp, val dot: Dp) {
+    val width: Dp get() = rate + pitch + mix + volume + dot * 3 + ChipPad * 2 + ChipGap * 6
+}
+
+@Composable
+private fun chipCells(): ChipCells {
+    val caption = Mbp.type.caption
+    return ChipCells(
+        rate = readoutWidth(listOf("1.00×"), caption, null),
+        pitch = readoutWidth(listOf("+12st", "-12st"), caption, null),
+        mix = readoutWidth(listOf("-vocals", "3/4"), caption, null),
+        volume = readoutWidth(listOf("100"), caption, null),
+        dot = readoutWidth(listOf("·"), caption, null),
+    )
+}
+
+@Composable
+private fun ChipCell(text: String, width: Dp, color: androidx.compose.ui.graphics.Color) {
+    Text(
+        text,
+        color = color,
+        fontFamily = Mbp.Mono,
+        fontSize = Mbp.type.caption,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.width(width),
+    )
+}
+
+/**
+ * Width of the widest of [samples] in the readout style. Each cell is sized from the values
+ * it really shows, so it stays fixed across font scales and OEM fonts. Guessing by glyph is
+ * not safe: on a Japanese font chain a symbol like ♯ can fall back to a full-width one.
+ */
+@Composable
+private fun readoutWidth(samples: List<String>, fontSize: TextUnit, fontWeight: FontWeight?): Dp {
+    val measurer = rememberTextMeasurer()
+    val base = LocalTextStyle.current
+    val density = LocalDensity.current
+    return remember(samples, fontSize, fontWeight, base, density) {
+        val style = base.merge(TextStyle(fontFamily = Mbp.Mono, fontWeight = fontWeight, fontSize = fontSize))
+        val widest = samples.maxOf { measurer.measure(it, style, maxLines = 1).size.width }
+        with(density) { widest.toDp() }
     }
 }
 

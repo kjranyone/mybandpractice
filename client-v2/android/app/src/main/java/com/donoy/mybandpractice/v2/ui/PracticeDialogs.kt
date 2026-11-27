@@ -45,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import kotlinx.coroutines.launch
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
@@ -112,22 +113,29 @@ fun MixerPanel(model: PracticeModel, onClose: () -> Unit, modifier: Modifier = M
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp),
         ) {
-        SectionTitle("Fader Console")
-        if (!allOn) {
+        // The hint keeps its slot while hidden, so the faders below never jump.
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            SectionTitle("Fader Console")
             Text(
                 "Reset Stems",
-                color = Mbp.Accent,
+                color = if (allOn) Color.Transparent else Mbp.Accent,
                 fontSize = Mbp.type.bodySm,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
-                    .clickable { model.resetStems() }
-                    .padding(top = 8.dp, bottom = 8.dp),
+                    .then(if (allOn) Modifier.clearAndSetSemantics { } else Modifier)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = !allOn) { model.resetStems() }
+                    .padding(top = 8.dp, bottom = 8.dp, start = 12.dp),
             )
         }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp, bottom = 4.dp),
+                .padding(bottom = 4.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             stems.forEach { name ->
