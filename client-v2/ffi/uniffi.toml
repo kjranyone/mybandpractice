@@ -1,0 +1,4 @@
+[bindings.kotlin]
+package_name = "com.donoy.mybandpractice.v2.core"
+cdylib_name = "mbp_ffi"
+kotlin_multiplatform = false

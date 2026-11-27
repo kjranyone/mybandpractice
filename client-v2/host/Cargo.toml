@@ -1,0 +1,15 @@
+[package]
+name = "mbp-play"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Windows player for the mybandpractice v2 core"
+
+[[bin]]
+name = "mbp-play"
+path = "src/main.rs"
+
+[dependencies]
+cpal = "0.15"
+crossterm = "0.28"
+mbp-core = { path = "../core" }

@@ -134,10 +134,12 @@ def load_model(model_type: str, config_path: Path, ckpt_path: Path, device: str)
 def encode_lossy(wav_path: Path, out_path: Path, codec: str, bitrate: str) -> None:
     """Encode a temp wav to mp3 or ogg/opus via ffmpeg."""
     encoder = {"mp3": ["-c:a", "libmp3lame"], "ogg": ["-c:a", "libopus", "-vbr", "on"]}[codec]
+    # libopus has no 44100 Hz mode. 48000 matches the existing stem library.
+    sample_rate = "48000" if codec == "ogg" else "44100"
     res = subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-nostats", "-y",
-            "-i", str(wav_path), *encoder, "-b:a", bitrate, "-ar", "44100",
+            "-i", str(wav_path), *encoder, "-b:a", bitrate, "-ar", sample_rate,
             str(out_path),
         ],
         capture_output=True,
@@ -216,19 +218,34 @@ def separate_song(
         net, config = load_model(model["model_type"], config_path, ckpt_path, device)
         print(f"      model loaded in {time.time() - t0:.1f}s on {device}")
 
+        # XPU ignores torch.cuda.amp, so keep the resident weights in fp16
+        # before measuring. fp32 weights left ~2.9 GiB free on Arc B570 and
+        # the first forward never returned from the driver's MakeResident.
+        use_amp = bool(getattr(config.training, "use_amp", True))
+        if use_amp and device == "xpu":
+            net = net.to(dtype=torch.float16)
+            gc.collect()
+            torch.xpu.synchronize()
+            torch.xpu.empty_cache()
+            print("      weights: float16")
+
         # Free-memory guard: oversubscription on iGPU systems can
-        # hard-freeze the whole machine.
+        # hard-freeze the whole machine. Measured after weights are resident.
         if device in ("cuda", "xpu"):
             free, total = (
                 torch.cuda.mem_get_info()
                 if device == "cuda"
                 else torch.xpu.mem_get_info()
             )
-            need = 2.5 * 1024**3  # fp32 model + activations, conservative
+            # 2.5 GiB leftover was not enough for this model's forward on Arc.
+            need = (4.0 if device == "xpu" else 2.5) * 1024**3
             free_g = free / 1024**3
             print(f"      VRAM free: {free_g:.2f} GiB / {total / 1024**3:.2f} GiB")
             if free < need:
                 if device == "xpu":
+                    del net
+                    gc.collect()
+                    torch.xpu.empty_cache()
                     raise RuntimeError(
                         f"only {free_g:.2f} GiB VRAM free (< "
                         f"{need / 1024**3:.1f} GiB needed); refusing to run on "

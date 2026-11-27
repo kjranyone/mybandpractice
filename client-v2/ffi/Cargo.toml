@@ -1,0 +1,23 @@
+[package]
+name = "mbp-ffi"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "UniFFI surface for the mybandpractice v2 core"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+name = "mbp_ffi"
+
+[dependencies]
+mbp-core = { path = "../core" }
+thiserror = "2"
+uniffi = "0.29"
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
