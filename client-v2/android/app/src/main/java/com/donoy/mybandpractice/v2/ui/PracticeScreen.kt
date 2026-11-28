@@ -46,6 +46,7 @@ import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -136,6 +137,8 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
     var deckTop by deckTopState
     val drawerWidthState = remember { mutableFloatStateOf(with(density) { 340.dp.toPx() }) }
     var drawerWidthPx by drawerWidthState
+    // The song list is on screen all the time, or in the drawer while the drawer is out.
+    val listShown by remember(drawer) { derivedStateOf { !drawer || drawerProgress.floatValue > 0.01f } }
     val mixerPanelDp = (widthDp - 72).coerceIn(300, 520).dp
     val mixerProgress = remember { mutableFloatStateOf(0f) }
     val mixerAnim = remember { mutableStateOf<Job?>(null) }
@@ -321,6 +324,7 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
                     onPicked = { listOpen = false },
                     onSearchBounds = { searchRect = it },
                     panel = false,
+                    live = listShown,
                     modifier = Modifier
                         .fillMaxSize()
                         .safeDrawingPadding()
@@ -431,11 +435,15 @@ private fun SongList(
     onPicked: () -> Unit = {},
     onSearchBounds: (Rect) -> Unit = {},
     panel: Boolean = true,
+    // Whether the list can be seen. Hidden in the closed drawer, the "now playing" marks
+    // would still follow the playhead.
+    live: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val songs = model.filtered
     val listState = rememberLazyListState()
     val active = model.pendingSlug ?: model.current?.slug
+    val playhead = remember { derivedStateOf { model.position } }
     LaunchedEffect(active, songs.size) {
         val index = songs.indexOfFirst { it.slug == active }
         if (index >= 0) listState.animateScrollToItem(index)
@@ -516,7 +524,7 @@ private fun SongList(
                     Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
                         when {
                             rowBuffering -> Text("·", color = Mbp.Accent, fontFamily = Mbp.Mono, fontSize = Mbp.type.label)
-                            isActive && model.playing -> EqMarks(model.position)
+                            isActive && live && model.playing -> EqMarks(playhead)
                             else -> Text("%02d".format(index + 1), color = Mbp.Faint, fontFamily = Mbp.Mono, fontSize = Mbp.type.label)
                         }
                     }
@@ -584,18 +592,19 @@ private fun ModeRow(label: String, active: Boolean, count: String? = null, onCli
 private val EqOffsets = listOf(0f, 2.1f, 4.2f)
 
 /** The "now playing" marks. They follow the playhead, which the model updates ten times a
- *  second: an animation of their own kept the whole app redrawing at 60 fps while playing. */
+ *  second: an animation of their own kept the whole app redrawing at 60 fps while playing.
+ *  The playhead is read while the layers are placed, so no update recomposes anything. */
 @Composable
-private fun EqMarks(position: Float) {
+private fun EqMarks(position: State<Float>) {
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom, modifier = Modifier.height(12.dp)) {
         EqOffsets.forEach { offset ->
-            val wave = 0.5f + 0.5f * sin(position * EQ_SPEED + offset)
             // The bars scale their layer only: a height would lay the row out on every update.
             Box(
                 Modifier
                     .width(2.dp)
                     .height(12.dp)
                     .graphicsLayer {
+                        val wave = 0.5f + 0.5f * sin(position.value * EQ_SPEED + offset)
                         scaleY = 0.4f + 0.6f * wave
                         transformOrigin = TransformOrigin(0.5f, 1f)
                     }
@@ -633,9 +642,17 @@ private fun Lyrics(
         }
         return
     }
-    val activeMarker = model.markers.lastOrNull { it.time <= model.position + 0.2 }
-    var stanzaCounter = -1
-    LazyColumn(modifier.padding(top = topPad, start = 22.dp, end = 22.dp, bottom = 24.dp)) {
+    // Follows the playhead without recomposing for each tick of it: only when the playhead
+    // reaches another marker.
+    val activeMarker by remember {
+        derivedStateOf { model.markers.lastOrNull { it.time <= model.position + 0.2 } }
+    }
+    // In a layer of its own, so that a change elsewhere does not record the whole lyric again.
+    LazyColumn(
+        modifier
+            .padding(top = topPad, start = 22.dp, end = 22.dp, bottom = 24.dp)
+            .graphicsLayer(),
+    ) {
         item {
             Text(song.title, color = Mbp.Text, fontSize = Mbp.type.song, fontWeight = FontWeight.Bold, lineHeight = Mbp.type.songLine)
             Text(song.artist, color = Mbp.Muted, fontSize = Mbp.type.title, modifier = Modifier.padding(top = 6.dp))
@@ -658,6 +675,9 @@ private fun Lyrics(
             }
         }
         item {
+            // Counted here, not next to the list: a variable captured from around the item
+            // gives it a new content each time the lyric recomposes.
+            var stanzaCounter = -1
             Column(
                 Modifier
                     .fillMaxWidth()

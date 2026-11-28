@@ -783,6 +783,8 @@ fun uniffi_mbp_ffi_checksum_method_player_load_chunks_dir(
 ): Short
 fun uniffi_mbp_ffi_checksum_method_player_master_gain(
 ): Short
+fun uniffi_mbp_ffi_checksum_method_player_native_handle(
+): Short
 fun uniffi_mbp_ffi_checksum_method_player_pause(
 ): Short
 fun uniffi_mbp_ffi_checksum_method_player_play(
@@ -790,8 +792,6 @@ fun uniffi_mbp_ffi_checksum_method_player_play(
 fun uniffi_mbp_ffi_checksum_method_player_playing(
 ): Short
 fun uniffi_mbp_ffi_checksum_method_player_position(
-): Short
-fun uniffi_mbp_ffi_checksum_method_player_render_pcm(
 ): Short
 fun uniffi_mbp_ffi_checksum_method_player_seek(
 ): Short
@@ -876,6 +876,8 @@ fun uniffi_mbp_ffi_fn_method_player_load_chunks_dir(`ptr`: Pointer,`path`: RustB
 ): Unit
 fun uniffi_mbp_ffi_fn_method_player_master_gain(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Float
+fun uniffi_mbp_ffi_fn_method_player_native_handle(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Long
 fun uniffi_mbp_ffi_fn_method_player_pause(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_mbp_ffi_fn_method_player_play(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -884,8 +886,6 @@ fun uniffi_mbp_ffi_fn_method_player_playing(`ptr`: Pointer,uniffi_out_err: Uniff
 ): Byte
 fun uniffi_mbp_ffi_fn_method_player_position(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Double
-fun uniffi_mbp_ffi_fn_method_player_render_pcm(`ptr`: Pointer,`frames`: Int,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
 fun uniffi_mbp_ffi_fn_method_player_seek(`ptr`: Pointer,`seconds`: Double,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_mbp_ffi_fn_method_player_set_master_gain(`ptr`: Pointer,`gain`: Float,uniffi_out_err: UniffiRustCallStatus, 
@@ -1049,6 +1049,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_mbp_ffi_checksum_method_player_master_gain() != 27577.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_mbp_ffi_checksum_method_player_native_handle() != 16868.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_mbp_ffi_checksum_method_player_pause() != 17769.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1059,9 +1062,6 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mbp_ffi_checksum_method_player_position() != 42088.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_mbp_ffi_checksum_method_player_render_pcm() != 48052.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_mbp_ffi_checksum_method_player_seek() != 14870.toShort()) {
@@ -1280,6 +1280,29 @@ public object FfiConverterInt: FfiConverter<Int, Int> {
 /**
  * @suppress
  */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterFloat: FfiConverter<Float, Float> {
     override fun lift(value: Float): Float {
         return value
@@ -1403,25 +1426,6 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     }
 }
 
-/**
- * @suppress
- */
-public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
-    override fun read(buf: ByteBuffer): ByteArray {
-        val len = buf.getInt()
-        val byteArr = ByteArray(len)
-        buf.get(byteArr)
-        return byteArr
-    }
-    override fun allocationSize(value: ByteArray): ULong {
-        return 4UL + value.size.toULong()
-    }
-    override fun write(value: ByteArray, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        buf.put(value)
-    }
-}
-
 
 // This template implements a class for working with a Rust struct via a Pointer/Arc<T>
 // to the live Rust struct on the other side of the FFI.
@@ -1535,6 +1539,12 @@ public interface PlayerInterface {
     
     fun `masterGain`(): kotlin.Float
     
+    /**
+     * Address of the JNI side of this player, for `NativeAudio`. It is good for as long
+     * as this object, which owns it.
+     */
+    fun `nativeHandle`(): kotlin.ULong
+    
     fun `pause`()
     
     fun `play`()
@@ -1542,11 +1552,6 @@ public interface PlayerInterface {
     fun `playing`(): kotlin.Boolean
     
     fun `position`(): kotlin.Double
-    
-    /**
-     * Interleaved stereo little-endian i16, `frames` per call.
-     */
-    fun `renderPcm`(`frames`: kotlin.UInt): kotlin.ByteArray
     
     fun `seek`(`seconds`: kotlin.Double)
     
@@ -1732,6 +1737,22 @@ open class Player: Disposable, AutoCloseable, PlayerInterface
     }
     
 
+    
+    /**
+     * Address of the JNI side of this player, for `NativeAudio`. It is good for as long
+     * as this object, which owns it.
+     */override fun `nativeHandle`(): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_mbp_ffi_fn_method_player_native_handle(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
     override fun `pause`()
         = 
     callWithPointer {
@@ -1772,21 +1793,6 @@ open class Player: Disposable, AutoCloseable, PlayerInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_mbp_ffi_fn_method_player_position(
         it, _status)
-}
-    }
-    )
-    }
-    
-
-    
-    /**
-     * Interleaved stereo little-endian i16, `frames` per call.
-     */override fun `renderPcm`(`frames`: kotlin.UInt): kotlin.ByteArray {
-            return FfiConverterByteArray.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_mbp_ffi_fn_method_player_render_pcm(
-        it, FfiConverterUInt.lower(`frames`),_status)
 }
     }
     )

@@ -41,10 +41,15 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Canvas as GraphicsCanvas
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -52,6 +57,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -61,6 +67,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.toSize
 import com.donoy.mybandpractice.v2.MIN_LOOP
 import com.donoy.mybandpractice.v2.PlaybackMode
 import com.donoy.mybandpractice.v2.PracticeModel
@@ -175,19 +182,31 @@ private fun Waveform(model: PracticeModel, disabled: Boolean) {
     val song = model.current
     val peaks = if (model.peaks.size >= 8) model.peaks else syntheticPeaks(song?.slug ?: "empty", 140)
     val duration = model.duration.coerceAtLeast(0.01f)
-    val progress = (model.position / duration).coerceIn(0f, 1f)
     val loop = model.loop
     var widthPx by remember { mutableFloatStateOf(1f) }
     var lastTap by remember { mutableLongStateOf(0L) }
     var lastX by remember { mutableFloatStateOf(0f) }
-    val handlePx = with(LocalDensity.current) { 16.dp.toPx() }
+    val density = LocalDensity.current
+    val handlePx = with(density) { 16.dp.toPx() }
 
     fun timeAt(x: Float, width: Float): Float {
         val ratio = (x / width.coerceAtLeast(1f)).coerceIn(0f, 1f)
         return ratio * model.duration
     }
 
-    val shortWave = with(LocalDensity.current) { widthPx < 700.dp.toPx() }
+    val shortWave = with(density) { widthPx < 700.dp.toPx() }
+    // The bars stay the same while the song plays: drawn once, then shown tinted and
+    // clipped. A hundred rounded rects recorded ten times a second was the dearest part
+    // of a tick.
+    val barPad = with(density) { 2.dp.toPx() }
+    val bars = remember(peaks, widthPx, shortWave, barPad) {
+        waveImage(
+            peaks,
+            widthPx.roundToInt(),
+            with(density) { (if (shortWave) 56.dp else 72.dp).toPx().roundToInt() },
+            barPad,
+        )
+    }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Box(
             modifier = Modifier
@@ -253,41 +272,26 @@ private fun Waveform(model: PracticeModel, disabled: Boolean) {
                     }
                 },
         ) {
-            Canvas(Modifier.fillMaxSize()) {
-                val n = peaks.size
-                val pad = 2.dp.toPx()
-                val pitch = (size.width - pad * 2) / n
-                val barW = (pitch - 1f).coerceAtLeast(1f)
-                val mid = size.height / 2f
-                val loopStartR = loop?.let { (it.first / duration).toFloat() }
-                val loopEndR = loop?.let { (it.second / duration).toFloat() }
-                for (i in 0 until n) {
-                    val r = (i + 0.5f) / n
-                    val played = r <= progress
-                    val inLoop = loopStartR != null && loopEndR != null && r in loopStartR..loopEndR
-                    val color = when {
-                        played && inLoop -> Mbp.BarLoopPlayed
-                        played -> Mbp.Sc
-                        inLoop -> Mbp.BarLoop
-                        else -> Mbp.Bar
-                    }
-                    val barH = (peaks[i] * size.height).coerceAtLeast(size.height * 0.08f)
-                    drawRoundRect(
-                        color = color,
-                        topLeft = Offset(pad + i * pitch, mid - barH / 2f),
-                        size = Size(barW, barH),
-                        cornerRadius = CornerRadius(1f, 1f),
-                    )
+            // In its own layer, and reading the playhead while it draws: the ten updates a
+            // second redraw these bars and nothing above them.
+            Canvas(Modifier.fillMaxSize().graphicsLayer()) {
+                val progress = (model.position / duration).coerceIn(0f, 1f)
+                val played = progress * size.width
+                val loopLeft = loop?.let { (it.first / duration * size.width).toFloat() }
+                val loopRight = loop?.let { (it.second / duration * size.width).toFloat() }
+                // what has played wins over the loop colour, inside the loop it is the mix of both
+                drawImage(bars, colorFilter = PlainBars)
+                if (loopLeft != null && loopRight != null) {
+                    clipRect(left = loopLeft, right = loopRight) { drawImage(bars, colorFilter = LoopBars) }
                 }
-                if (loop != null) {
-                    val left = (loop.first / duration * size.width).toFloat()
-                    val right = (loop.second / duration * size.width).toFloat()
-                    drawRect(Mbp.LoopSoft, topLeft = Offset(left, 0f), size = Size(right - left, size.height))
-                    drawLine(Mbp.Loop, Offset(left, 0f), Offset(left, size.height), strokeWidth = 2.dp.toPx())
-                    drawLine(Mbp.Loop, Offset(right, 0f), Offset(right, size.height), strokeWidth = 2.dp.toPx())
+                clipRect(right = played) { drawImage(bars, colorFilter = PlayedBars) }
+                if (loopLeft != null && loopRight != null) {
+                    clipRect(left = loopLeft, right = minOf(loopRight, played)) { drawImage(bars, colorFilter = PlayedLoopBars) }
+                    drawRect(Mbp.LoopSoft, topLeft = Offset(loopLeft, 0f), size = Size(loopRight - loopLeft, size.height))
+                    drawLine(Mbp.Loop, Offset(loopLeft, 0f), Offset(loopLeft, size.height), strokeWidth = 2.dp.toPx())
+                    drawLine(Mbp.Loop, Offset(loopRight, 0f), Offset(loopRight, size.height), strokeWidth = 2.dp.toPx())
                 }
-                val head = progress * size.width
-                drawLine(androidx.compose.ui.graphics.Color.White, Offset(head, 0f), Offset(head, size.height), strokeWidth = 2.dp.toPx())
+                drawLine(androidx.compose.ui.graphics.Color.White, Offset(played, 0f), Offset(played, size.height), strokeWidth = 2.dp.toPx())
             }
             if (model.buffering && song != null) {
                 Box(
@@ -316,10 +320,53 @@ private fun Waveform(model: PracticeModel, disabled: Boolean) {
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatTimePrecise(model.position.toDouble()), color = Mbp.Muted, fontFamily = Mbp.Mono, fontSize = Mbp.type.label)
+            ElapsedTime(model)
             Text(formatTimePrecise(model.duration.toDouble()), color = Mbp.Muted, fontFamily = Mbp.Mono, fontSize = Mbp.type.label)
         }
     }
+}
+
+/** The elapsed time, which changes ten times a second. Drawn in the draw phase from the
+ *  playhead: an update neither recomposes nor lays out anything. */
+@Composable
+private fun ElapsedTime(model: PracticeModel) {
+    val measurer = rememberTextMeasurer()
+    val style = LocalTextStyle.current.merge(TextStyle(color = Mbp.Muted, fontFamily = Mbp.Mono, fontSize = Mbp.type.label))
+    // a monospaced font makes every reading as wide as the longest one: the box keeps its size
+    val room = with(LocalDensity.current) { measurer.measure(WidestReading, style).size.toSize().toDpSize() }
+    Box(
+        Modifier
+            .size(room)
+            .graphicsLayer()
+            .drawBehind { drawText(measurer, formatTimePrecise(model.position.toDouble()), style = style) },
+    )
+}
+
+private val WidestReading = "00:00.0"
+
+// How the one picture of the bars is shown; see `Waveform`.
+private val PlainBars = ColorFilter.tint(Mbp.Bar)
+private val LoopBars = ColorFilter.tint(Mbp.BarLoop)
+private val PlayedBars = ColorFilter.tint(Mbp.Sc)
+private val PlayedLoopBars = ColorFilter.tint(Mbp.BarLoopPlayed)
+
+/** The bars in white, at the size they are shown at. */
+private fun waveImage(peaks: FloatArray, width: Int, height: Int, pad: Float): ImageBitmap {
+    val image = ImageBitmap(width, height)
+    val canvas = GraphicsCanvas(image)
+    val white = Paint().apply {
+        color = androidx.compose.ui.graphics.Color.White
+        isAntiAlias = true
+    }
+    val pitch = (width - pad * 2) / peaks.size
+    val barW = (pitch - 1f).coerceAtLeast(1f)
+    val mid = height / 2f
+    for ((i, peak) in peaks.withIndex()) {
+        val barH = (peak * height).coerceAtLeast(height * 0.08f)
+        val left = pad + i * pitch
+        canvas.drawRoundRect(left, mid - barH / 2f, left + barW, mid + barH / 2f, 1f, 1f, white)
+    }
+    return image
 }
 
 private val ColorBgWave = androidx.compose.ui.graphics.Color(0xFF0A0C10)
@@ -608,8 +655,11 @@ private fun ChordReadout(
     onToggleChordSheet: () -> Unit,
     disabled: Boolean,
 ) {
-    val hit = model.chords?.chords?.firstOrNull { model.position >= it.start && model.position < it.end }
-    val shown = hit?.let { toLeadSheetNotation(transposeChord(it.chord, model.pitch)) }
+    // Follows the playhead without recomposing for each tick of it: only when the chord changes.
+    val shown by followAsState {
+        model.chords?.chords?.firstOrNull { model.position >= it.start && model.position < it.end }
+            ?.let { toLeadSheetNotation(transposeChord(it.chord, model.pitch)) }
+    }
     val has = model.chords?.chords?.isNotEmpty() == true
     Text(
         shown ?: if (has) "Chord" else "--",

@@ -6,13 +6,12 @@ import android.media.AudioTrack
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
-import com.donoy.mybandpractice.v2.core.Player
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.concurrent.thread
 
 /** Pulls stereo PCM from the Rust core into an [AudioTrack]. */
-class PcmFeeder(private val player: Player) {
+class PcmFeeder(private val audio: NativeAudio) {
     @Volatile private var running = false
     /** The output failed for good. The engine is no longer pulled forward, so the song waits. */
     @Volatile var failed = false
@@ -61,24 +60,25 @@ class PcmFeeder(private val player: Player) {
     }
 
     private fun feed(track: AudioTrack) {
-        val shorts = ShortArray(FRAMES * 2)
+        // One block. The engine fills it in place and the track reads it there: nothing
+        // is copied on the way, and nothing is allocated per block.
+        val block = ByteBuffer.allocateDirect(FRAMES * 4).order(ByteOrder.nativeOrder())
         var failures = 0
         while (running) {
-            if (!player.playing()) {
+            if (!audio.transport().playing) {
                 idle(track)
                 continue
             }
-            val bytes = player.renderPcm(FRAMES.toUInt())
-            ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
-            var offset = 0
+            audio.pull(block, FRAMES)
+            block.position(0)
+            block.limit(FRAMES * 4)
             var result = 0
-            while (offset < shorts.size && running) {
-                val wrote = track.write(shorts, offset, shorts.size - offset)
+            while (block.hasRemaining() && running) {
+                val wrote = track.write(block, block.remaining(), AudioTrack.WRITE_BLOCKING)
                 if (wrote <= 0) {
                     result = wrote
                     break
                 }
-                offset += wrote
             }
             if (result != 0) {
                 // A routing change or the audio server going away: restart the stream instead
@@ -105,13 +105,17 @@ class PcmFeeder(private val player: Player) {
     /** Nothing plays: the stream is paused so that it does not hold the speaker open for silence. */
     private fun idle(track: AudioTrack) {
         // what was written last is the end of the song: let it play out
-        SystemClock.sleep(DRAIN_MS)
-        if (!running || player.playing()) return
+        var waited = 0L
+        while (running && waited < DRAIN_MS && !audio.transport().playing) {
+            SystemClock.sleep(WATCH_MS)
+            waited += WATCH_MS
+        }
+        if (!running || audio.transport().playing) return
         runCatching {
             track.pause()
             track.flush()
         }
-        while (running && !player.playing()) SystemClock.sleep(20)
+        while (running && !audio.transport().playing) SystemClock.sleep(WATCH_MS)
         if (running) runCatching { track.play() }
     }
 
@@ -121,6 +125,8 @@ class PcmFeeder(private val player: Player) {
         const val FRAMES = 1024
         /** A little longer than the track buffer, which holds 200 ms. */
         const val DRAIN_MS = 250L
+        /** How often the engine is asked whether it plays again. */
+        const val WATCH_MS = 20L
         const val CHANNELS = AudioFormat.CHANNEL_OUT_STEREO
         const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
     }

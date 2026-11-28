@@ -453,7 +453,14 @@ fun ChordSheetDialog(model: PracticeModel, onClose: () -> Unit) {
         val analysis = androidx.compose.runtime.remember(data, model.pitch, displayKey) {
             analyzeBarChords(data.bars, displayKey, model.pitch)
         }
-        val active = data.bars.firstOrNull { model.position >= it.start && model.position < it.end }
+        // Both follow the playhead without recomposing for each tick of it: only when the
+        // highlighted bar, or the chord in it, changes.
+        val active by followAsState {
+            data.bars.firstOrNull { model.position >= it.start && model.position < it.end }
+        }
+        val currentStart by followAsState {
+            active?.chords?.firstOrNull { model.position >= it.start && model.position < it.end }?.start
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 8.dp)) {
             if (displayKey != null) Chip("Key $displayKey", true) {}
             if (data.bpm != null) Chip("BPM ${data.bpm.roundToInt()}", false) {}
@@ -491,7 +498,7 @@ fun ChordSheetDialog(model: PracticeModel, onClose: () -> Unit) {
                                 val info = analysis.chords[chordAnalysisKey(bar.number, chord.start)]
                                 val nc = symbol == "N.C." || symbol == "--" || symbol == "X"
                                 val paint = chordPaint(info, nc, chord.isDominant)
-                                val current = model.position >= chord.start && model.position < chord.end
+                                val current = chord.start == currentStart
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()

@@ -465,21 +465,25 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun tick() {
-        val engine = player ?: return
-        playing = engine.playing()
-        buffering = engine.buffering() || pendingSlug != null
-        val dur = engine.duration()
-        if (dur > 0) duration = dur.toFloat()
-        if (!dragging && current != null) position = engine.position().toFloat()
-        val err = engine.lastError()
-        if (err.isNotEmpty()) status = err
+        val bridge = Playback.audio ?: return
+        // One call for all of it: asking UniFFI for each field cost a good part of a
+        // millisecond apiece, ten times a second.
+        val transport = bridge.transport()
+        playing = transport.playing
+        buffering = transport.buffering || pendingSlug != null
+        if (transport.duration > 0) duration = transport.duration.toFloat()
+        if (!dragging && current != null) position = transport.position.toFloat()
+        if (transport.failed) {
+            val err = bridge.lastError()
+            if (err.isNotEmpty()) status = err
+        }
         Playback.outputError?.let { status = it }
         val region = loop
         if (playing && loopEnabled && region != null && position >= region.second - 0.04) {
             seek(region.first)
             return
         }
-        if (engine.ended() && current != null) {
+        if (transport.ended && current != null) {
             if (!endHandled) {
                 endHandled = true
                 when (playbackMode) {

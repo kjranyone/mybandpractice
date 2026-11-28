@@ -22,6 +22,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Personal builds go over USB to the band's tablets. The debug key lets this
+            // build update a debug install in place, songs and markers included. Put a
+            // private keystore here before handing the app to anyone else.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
