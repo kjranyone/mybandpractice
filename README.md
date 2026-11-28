@@ -449,6 +449,12 @@ AI アシスタント (Antigravity, Cursor, Copilot 等) が本リポジトリ�
 
 ---
 
+## 📝 関連記事
+
+- [YouTube音源をボーカル除去・ステム分離してバンド練習用プレイヤーを作った](https://oto-nari.com/posts/my-band-practice/)
+
+---
+
 ## 📄 ライセンス
 
 [MIT License](LICENSE)
