@@ -26,6 +26,8 @@ import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -659,6 +661,7 @@ private val StanzaKey = 28.dp
 /** The top padding of the lyric card. The place of a stanza is measured without it. */
 private val CardPadTop = 16.dp
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Lyrics(
     model: PracticeModel,
@@ -720,10 +723,14 @@ private fun Lyrics(
         state = listState,
     ) {
         item {
-            Text(song.title, color = Mbp.Text, fontSize = Mbp.type.song, fontWeight = FontWeight.Bold, lineHeight = Mbp.type.songLine)
-            Text(song.artist, color = Mbp.Muted, fontSize = Mbp.type.title, modifier = Modifier.padding(top = 6.dp))
-            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                MetaChip(song.slug, mono = true)
+            // No title and artist here: the player below names the song, and the lyric file
+            // repeats it in its first lines, which are left out of the card for that reason.
+            // The credits wrap chip by chip: a long name goes to the next line whole. The slug
+            // is not shown: it is the folder's name, not something to read.
+            FlowRow(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 song.lyricist?.let { MetaChip("L: $it") }
                 song.composer?.let { MetaChip("C: $it") }
                 song.sourceUrl?.let { url ->
@@ -766,8 +773,9 @@ private fun Lyrics(
                         val activeId = activeMarker?.id
                         model.lyrics.forEach { block ->
                             when (block) {
-                                is LyricsBlock.Heading -> Text(block.text, color = Mbp.Text, fontWeight = FontWeight.SemiBold, fontSize = Mbp.type.headline)
-                                is LyricsBlock.Artist -> Text(block.text, color = Mbp.Muted, fontStyle = FontStyle.Italic, modifier = Modifier.padding(bottom = 12.dp))
+                                // the name of the song and who plays it: the player says so
+                                is LyricsBlock.Heading -> Unit
+                                is LyricsBlock.Artist -> Unit
                                 is LyricsBlock.Section -> Text(
                                     block.text,
                                     color = Mbp.Accent,
@@ -930,12 +938,11 @@ private fun TagChip(label: String, tied: Boolean, onClick: () -> Unit, onLongCli
 }
 
 @Composable
-private fun MetaChip(text: String, mono: Boolean = false) {
+private fun MetaChip(text: String) {
     Text(
         text,
         color = Mbp.Muted,
-        fontSize = if (mono) Mbp.type.label else Mbp.type.caption,
-        fontFamily = if (mono) Mbp.Mono else null,
+        fontSize = Mbp.type.caption,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .background(Mbp.BgElevated)
