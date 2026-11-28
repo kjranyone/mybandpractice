@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">バンド練習</string>
+    <string name="playback_channel">Playback</string>
+    <string name="playback_nothing">Nothing loaded</string>
+    <string name="playback_play">Play</string>
+    <string name="playback_pause">Pause</string>
+    <string name="playback_next">Next</string>
+    <string name="playback_previous">Previous</string>
+    <string name="playback_output_lost">音声出力が停止しました。アプリを開き直してください</string>
 </resources>

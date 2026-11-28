@@ -5,10 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -69,6 +65,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
@@ -94,6 +91,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -518,7 +516,7 @@ private fun SongList(
                     Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
                         when {
                             rowBuffering -> Text("·", color = Mbp.Accent, fontFamily = Mbp.Mono, fontSize = Mbp.type.label)
-                            isActive && model.playing -> EqMarks()
+                            isActive && model.playing -> EqMarks(model.position)
                             else -> Text("%02d".format(index + 1), color = Mbp.Faint, fontFamily = Mbp.Mono, fontSize = Mbp.type.label)
                         }
                     }
@@ -583,26 +581,31 @@ private fun ModeRow(label: String, active: Boolean, count: String? = null, onCli
     }
 }
 
+private val EqOffsets = listOf(0f, 2.1f, 4.2f)
+
+/** The "now playing" marks. They follow the playhead, which the model updates ten times a
+ *  second: an animation of their own kept the whole app redrawing at 60 fps while playing. */
 @Composable
-private fun EqMarks() {
-    val transition = rememberInfiniteTransition(label = "eq")
+private fun EqMarks(position: Float) {
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom, modifier = Modifier.height(12.dp)) {
-        listOf(0, 150, 300).forEach { delay ->
-            val scale by transition.animateFloat(
-                initialValue = 0.4f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(tween(800, delayMillis = delay), RepeatMode.Reverse),
-                label = "bar",
-            )
+        EqOffsets.forEach { offset ->
+            val wave = 0.5f + 0.5f * sin(position * EQ_SPEED + offset)
+            // The bars scale their layer only: a height would lay the row out on every update.
             Box(
                 Modifier
                     .width(2.dp)
-                    .height((12 * scale).dp)
+                    .height(12.dp)
+                    .graphicsLayer {
+                        scaleY = 0.4f + 0.6f * wave
+                        transformOrigin = TransformOrigin(0.5f, 1f)
+                    }
                     .background(Mbp.Accent, RoundedCornerShape(1.dp)),
             )
         }
     }
 }
+
+private const val EQ_SPEED = 12.0f
 
 @Composable
 private fun Lyrics(

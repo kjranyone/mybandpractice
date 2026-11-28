@@ -73,7 +73,8 @@ mybandpractice/
 ├── dev.ps1                 # v2 クライアントの開発ランチャー (Windows クライアントの起動、Android 端末へのデプロイ)
 ├── client-v2/              # ネイティブクライアント (Windows GPUI / Android) と共通の Rust コア
 │   ├── build-android.ps1   # Rust コアの Android クロスコンパイルと Kotlin バインディングの更新
-│   └── deploy-android.ps1  # v2 Android アプリのビルド・インストールと楽曲ライブラリの転送
+│   ├── deploy-android.ps1  # v2 Android アプリのビルド・インストールと楽曲ライブラリの転送
+│   └── android/            # v2 Android アプリ (バックグラウンド再生は PlaybackService)
 ├── config.example.yaml     # 歌詞フェッチャー等の設定テンプレート
 ├── pyproject.toml          # uv による Python 環境定義 (torch XPU ビルド)
 ├── tools/btc/              # BTC-ISMIR19 クローン (初回実行時に自動クローン, Git除外)
@@ -170,6 +171,13 @@ client-v2\deploy-android.ps1 -Mode Songs -DryRun                      # 転送�
 - **Songs**: チャンクがある曲は `stems/chunks` と曲フォルダー直下のファイル (本体音源、`meta.json`、`lyrics.md`、`chords.json` など) のみを転送し、全ファイルのステムは送りません。チャンク未生成の曲はスキップされます。対話実行時は全曲、または番号・スラグで曲を選べます (スクリプトからは `-Songs`)。
 - 端末で作成した `practice.json` (マーカー、スタンザタグ) は保持され、ライブラリに存在しない曲・セットリストもそのまま残ります (`-Prune` で削除、対話実行時は確認します)。
 - アプリは内部ストレージ (`files/songs`, `files/setlists`) を読むため、転送は `adb push` → `run-as` で行います。端末にはデバッグビルド (`-Mode App` でインストールされるもの) が必要です。
+
+再生はフォアグラウンドサービス (`PlaybackService`, 種別 `mediaPlayback`) で続くので、他のアプリを開いても画面を消しても止まりません。
+
+- 通知とロック画面に前の曲 / 再生・一時停止 / 次の曲が出ます。メディアボタンも同じ `MediaSession` で受け付けます (adb からは `cmd media_session dispatch pause` などで試せます)。
+- 他のアプリが再生を始めると止まります。着信などで短く妨げられたときは止まった場所を保持し、戻ると再開します。
+- バックグラウンドでプロセスを落とされたときも、次の起動で前回の曲と位置 (5 秒ごとに保存) に戻ります。
+- 再生中だけオーディオ出力と WakeLock を持ち、止まっている間はスピーカーを開いたままにしません。
 
 > Web 版 (Capacitor) のデプロイは従来どおり `bin/sync.ps1` を使います。
 
