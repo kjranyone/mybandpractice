@@ -42,20 +42,30 @@ import com.donoy.mybandpractice.v2.formatTimePrecise
 import com.donoy.mybandpractice.v2.markerNear
 
 /**
- * The panel of a stanza that has no mark yet. Nothing happens before one of its keys is
- * tapped: a mark where the song is now, a mark near the playhead or elsewhere in the song
- * tied to the stanza instead, and for a tag of the old kind on it a time of its own or its
- * end. Opens from the key in the gutter of the stanza.
+ * The panel of a stanza. Nothing happens before one of its keys is tapped: the marks it has,
+ * to be edited; a mark where the song is now, or one near the playhead or elsewhere in the
+ * song, to be added or tied to the stanza; and for a tag of the old kind on it a time of its
+ * own or its end. Opens from a hold on the stanza, and from a tap on a stanza without a mark.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StanzaSheet(model: PracticeModel, stanzaIndex: Int, onClose: () -> Unit) {
-    // What was near the playhead when the panel opened is what is offered.
+fun StanzaSheet(model: PracticeModel, stanzaIndex: Int, onEditMark: (String) -> Unit, onClose: () -> Unit) {
+    // What was there and near the playhead when the panel opened is what is offered.
+    val own = remember { model.markers.filter { it.stanzaIndex == stanzaIndex } }
     val near = remember { markerNear(model.markers, model.position.toDouble())?.takeIf { it.stanzaIndex != stanzaIndex } }
     val others = remember { model.markers.filter { it.stanzaIndex != stanzaIndex && it.id != near?.id } }
     val tags = remember { model.stanzaTags.filter { it.stanzaIndex == stanzaIndex } }
     Sheet(onClose) {
-        SectionTitle("このスタンザのマーク")
+        if (own.isNotEmpty()) {
+            SectionTitle("このスタンザのマーク")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                own.forEach { mark ->
+                    Chip("${mark.label} ${formatTimePrecise(mark.time)}", active = true) { onEditMark(mark.id) }
+                }
+            }
+            Text("タップで編集します。", color = Mbp.Faint, fontSize = Mbp.type.caption)
+        }
+        SectionTitle(if (own.isEmpty()) "マークを追加" else "マークをさらに追加、またはほかを紐付ける")
         Key("今の位置にマークを追加", strong = true, modifier = Modifier.fillMaxWidth(), trailing = { Playhead(model, Mbp.Ink) }) {
             model.markStanza(stanzaIndex)
             onClose()
@@ -98,9 +108,8 @@ fun StanzaSheet(model: PracticeModel, stanzaIndex: Int, onClose: () -> Unit) {
 
 /**
  * One mark, or one tag of the old kind, over the rest of the screen: its name, its place in
- * the song, the loop of its section, and its end. Opens from the key in the gutter of a
- * stanza that has a mark, and from a chip that is held down, in the lyrics or on the
- * waveform.
+ * the song, the loop of its section, and its end. Opens from a chip that is held down, in
+ * the lyrics or on the waveform, and from a mark picked in the panel of its stanza.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
