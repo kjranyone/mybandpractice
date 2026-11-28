@@ -246,7 +246,10 @@ function Test-AppRunning {
 function Get-DeviceListing {
   param([string]$Directory)
   $result = Invoke-RunAs @("ls", $Directory) -AllowFailure
-  return @($result.Lines | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  # A fresh install has neither folder yet. ls says so on its error stream, and that
+  # line must not pass for a song or a setlist that only exists on the device.
+  if ($result.Code -ne 0) { return @() }
+  return @($result.Lines | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch "^ls: " })
 }
 
 # --- library ----------------------------------------------------------------
