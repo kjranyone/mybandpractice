@@ -163,14 +163,16 @@ cargo build --release --locked --manifest-path client-v2/Cargo.toml -p mbp-windo
 ```powershell
 client-v2\deploy-android.ps1                                          # 対話式: app / songs / both を選択
 client-v2\deploy-android.ps1 -Mode Songs -Library "D:\Music\songs"    # 再ビルドせずに楽曲とセットリストを転送
+client-v2\deploy-android.ps1 -Mode Both -Build Release                # リリースビルドを入れて、楽曲も転送
 client-v2\deploy-android.ps1 -Mode Both -Serial <serial> -SkipNative  # Rust 側に変更がなければネイティブビルドを省略
 client-v2\deploy-android.ps1 -Mode Songs -DryRun                      # 転送内容の確認のみ (何も変更しない)
 ```
 
-- **App**: `build-android.ps1` (Rust コアのクロスコンパイルと Kotlin バインディングの更新) → `gradlew assembleDebug` → `adb install` の順に進み、インストール後にアプリを起動します。
+- **App**: `build-android.ps1` (Rust コアのクロスコンパイルと Kotlin バインディングの更新) → `gradlew assembleDebug` (`-Build Release` なら `assembleRelease`) → `adb install` の順に進み、インストール後にアプリを起動します。
+- **Release** (`-Build Release`、`dev.ps1` のメニューの [6]): デバッグキーで署名したリリースビルドです。デバッグビルドの上からそのまま更新でき、曲もマーカーも残ります。Android はデバッグビルドを検証しかしないのに対し、リリースビルドはインストール直後にスクリプトが全体を事前コンパイルするので、画面の再構成と描画がずっと軽くなります。練習で使う端末にはこちらを入れてください。
 - **Songs**: チャンクがある曲は `stems/chunks` と曲フォルダー直下のファイル (本体音源、`meta.json`、`lyrics.md`、`chords.json` など) のみを転送し、全ファイルのステムは送りません。チャンク未生成の曲はスキップされます。対話実行時は全曲、または番号・スラグで曲を選べます (スクリプトからは `-Songs`)。
 - 端末で作成した `practice.json` (マーカー、スタンザタグ) は保持され、ライブラリに存在しない曲・セットリストもそのまま残ります (`-Prune` で削除、対話実行時は確認します)。
-- アプリは内部ストレージ (`files/songs`, `files/setlists`) を読むため、転送は `adb push` → `run-as` で行います。端末にはデバッグビルド (`-Mode App` でインストールされるもの) が必要です。
+- アプリは内部ストレージ (`files/songs`, `files/setlists`) を読むため、転送は `adb push` → `run-as` で行います。`run-as` が届くのはデバッグビルドだけなので、端末にリリースビルドがあるときは転送の間だけデバッグビルドに差し替え、終わったらリリースビルドを戻してコンパイルし直します。どちらのインストールでも曲とマーカーは消えません。
 
 再生はフォアグラウンドサービス (`PlaybackService`, 種別 `mediaPlayback`) で続くので、他のアプリを開いても画面を消しても止まりません。
 
@@ -178,6 +180,7 @@ client-v2\deploy-android.ps1 -Mode Songs -DryRun                      # 転送�
 - 他のアプリが再生を始めると止まります。着信などで短く妨げられたときは止まった場所を保持し、戻ると再開します。
 - バックグラウンドでプロセスを落とされたときも、次の起動で前回の曲と位置 (5 秒ごとに保存) に戻ります。
 - 再生中だけオーディオ出力と WakeLock を持ち、止まっている間はスピーカーを開いたままにしません。
+- 再生中の画面は 1 秒に 10 回、波形と時刻だけを描き直します (位置は描画フェーズで読むので、何も再構成・再レイアウトしません)。コード表示と歌詞のマーカーは、鳴っているコードやマーカーが変わったときだけ更新します。音声の取り出しと再生状態の読み取りは JNI で直接行います (`ffi/src/native.rs`、`NativeAudio.kt`)。
 
 > Web 版 (Capacitor) のデプロイは従来どおり `bin/sync.ps1` を使います。
 

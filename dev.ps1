@@ -31,6 +31,12 @@
 .EXAMPLE
   .\dev.ps1 -Android Both -Serial X
   Install the app and sync the songs without asking (-Mode Both means the same).
+
+.EXAMPLE
+  .\dev.ps1 -Android Both -Build Release
+  Install the release build of the Android app (compiled ahead of time by Android)
+  and sync the songs to it.
+
   More options (song selection, -Prune, -SkipNative, -DryRun):
   client-v2\deploy-android.ps1
 #>
@@ -57,6 +63,11 @@ param(
     # What to deploy: App, Songs or Both. Implies -Android.
     [ValidateSet('App', 'Songs', 'Both')]
     [string]$Mode,
+
+    # Which Android build to install: Debug (the default) or Release. Android
+    # compiles a release build ahead of time, which makes it the faster one.
+    [ValidateSet('Debug', 'Release')]
+    [string]$Build = 'Debug',
 
     # Device to deploy to. Only needed when several devices are connected.
     [string]$Serial,
@@ -138,9 +149,9 @@ function Start-WindowsClient([switch]$ReleaseBuild) {
     }
 }
 
-function Start-Android([string]$TaskMode) {
+function Start-Android([string]$TaskMode, [string]$TaskBuild = $Build) {
     if (-not (Test-Path -LiteralPath $deployScript -PathType Leaf)) { throw "Deploy script not found: $deployScript" }
-    $deployArguments = @{}
+    $deployArguments = @{ Build = $TaskBuild }
     if ($TaskMode) { $deployArguments['Mode'] = $TaskMode }
     if ($Serial) { $deployArguments['Serial'] = $Serial }
     if ($script:libraryPath) { $deployArguments['Library'] = $script:libraryPath }
@@ -214,15 +225,16 @@ function Show-Menu {
     Write-Host '  [3] Android: install app + sync songs'
     Write-Host '  [4] Android: install app'
     Write-Host '  [5] Android: sync songs'
-    Write-Host '  [6] Change library folder'
+    Write-Host '  [6] Android: install the release build + sync songs'
+    Write-Host '  [7] Change library folder'
     Write-Host '  [0] Exit'
 }
 
-function Invoke-MenuAndroid([string]$TaskMode) {
+function Invoke-MenuAndroid([string]$TaskMode, [string]$TaskBuild = $Build) {
     $found = $false
     if ($script:libraryPath) { $found = Test-Path -LiteralPath $script:libraryPath -PathType Container }
     if ($TaskMode -ne 'App' -and -not $found) { Read-Library }
-    return (Start-Android $TaskMode)
+    return (Start-Android $TaskMode $TaskBuild)
 }
 
 function Invoke-MenuTask([scriptblock]$Task) {
@@ -247,7 +259,7 @@ if ($Run -or $Release -or $libraryArgument -or -not $interactive) {
 $script:failed = $false
 :menu while ($true) {
     Show-Menu
-    $choice = Read-Input 'Choice [0-6, Enter=1]'
+    $choice = Read-Input 'Choice [0-7, Enter=1]'
     if ($null -eq $choice) { break menu }
     if ($choice -eq '') { $choice = '1' }
     switch ($choice) {
@@ -256,9 +268,10 @@ $script:failed = $false
         '3' { Invoke-MenuTask { Invoke-MenuAndroid 'Both' } }
         '4' { Invoke-MenuTask { Invoke-MenuAndroid 'App' } }
         '5' { Invoke-MenuTask { Invoke-MenuAndroid 'Songs' } }
-        '6' { Invoke-MenuTask { Read-Library } }
+        '6' { Invoke-MenuTask { Invoke-MenuAndroid 'Both' 'Release' } }
+        '7' { Invoke-MenuTask { Read-Library } }
         '0' { break menu }
-        default { Write-Host 'Enter 0-6.' -ForegroundColor Yellow }
+        default { Write-Host 'Enter 0-7.' -ForegroundColor Yellow }
     }
 }
 if ($script:failed) { exit 1 }

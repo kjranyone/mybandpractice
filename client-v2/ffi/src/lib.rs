@@ -2,9 +2,13 @@
 //! The audio callback stays on the Kotlin side and asks for PCM.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use mbp_core::{waveform_peaks as peaks_of, Engine};
+
+mod native;
+
+use crate::native::NativeHandle;
 
 uniffi::setup_scaffolding!();
 
@@ -16,16 +20,28 @@ pub enum PlayerError {
 
 #[derive(uniffi::Object)]
 pub struct Player {
-    engine: Mutex<Engine>,
+    engine: Arc<Mutex<Engine>>,
+    /// What the JNI functions in `native` address.
+    native: Arc<NativeHandle>,
 }
 
 #[uniffi::export]
 impl Player {
     #[uniffi::constructor]
-    pub fn new() -> std::sync::Arc<Self> {
-        std::sync::Arc::new(Self {
-            engine: Mutex::new(Engine::new()),
+    pub fn new() -> Arc<Self> {
+        let engine = Arc::new(Mutex::new(Engine::new()));
+        Arc::new(Self {
+            native: Arc::new(NativeHandle {
+                engine: Arc::clone(&engine),
+            }),
+            engine,
         })
+    }
+
+    /// Address of the JNI side of this player, for `NativeAudio`. It is good for as long
+    /// as this object, which owns it.
+    pub fn native_handle(&self) -> u64 {
+        Arc::as_ptr(&self.native) as u64
     }
 
     pub fn load_chunks_dir(&self, path: String) -> Result<(), PlayerError> {
@@ -151,22 +167,6 @@ impl Player {
             .unwrap_or_else(|e| e.into_inner())
             .last_error()
             .unwrap_or_default()
-    }
-
-    /// Interleaved stereo little-endian i16, `frames` per call.
-    pub fn render_pcm(&self, frames: u32) -> Vec<u8> {
-        let frames = frames.clamp(1, 8_192) as usize;
-        let mut pcm = vec![0.0f32; frames * 2];
-        self.engine
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .render(&mut pcm);
-        let mut bytes = Vec::with_capacity(pcm.len() * 2);
-        for sample in pcm {
-            let s = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            bytes.extend_from_slice(&s.to_le_bytes());
-        }
-        bytes
     }
 }
 

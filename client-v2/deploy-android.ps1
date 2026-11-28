@@ -1,12 +1,16 @@
 <#
 .SYNOPSIS
   Deploy the v2 Android client to a connected device over adb: build and install
-  the debug APK, and copy the song library into the app's storage.
+  the app (debug, or release with -Build Release), and copy the song library into
+  the app's storage.
 
 .DESCRIPTION
   The app reads files/songs and files/setlists from its internal storage, so the
-  library is pushed to /data/local/tmp first and copied into place with run-as.
-  That needs a debug build of the app on the device.
+  library is pushed to /data/local/tmp first and copied into place with run-as,
+  which only reaches a debug build. When the device has the release build
+  (-Build Release), the script puts the debug build on for the copy and the
+  release build back on afterwards. The songs and the markers stay through
+  either install.
 
   Songs need stem chunks (stems/chunks/chunks.json). Whole-file stems stay on the
   PC when chunks exist. Each synced song is replaced, but the device's
@@ -22,6 +26,10 @@
   Sync the songs and setlists of that library without asking.
 
 .EXAMPLE
+  ./client-v2/deploy-android.ps1 -Mode Both -Build Release
+  Install the release build, with the songs synced on the way.
+
+.EXAMPLE
   ./client-v2/deploy-android.ps1 -Mode Both -Serial X -SkipNative -Prune
 #>
 #Requires -Version 5.1
@@ -34,6 +42,12 @@ param(
   # What to deploy. Ask when omitted, unless there is no terminal to ask.
   [ValidateSet("App", "Songs", "Both")]
   [string]$Mode,
+
+  # Which build to install. Release is not debuggable, and Android compiles it
+  # ahead of time: it is the one to play along with. Songs can be synced with
+  # either build on the device.
+  [ValidateSet("Debug", "Release")]
+  [string]$Build = "Debug",
 
   # Device to use. Only needed when several devices are connected.
   [string]$Serial,
@@ -221,7 +235,7 @@ function Test-AppAccess {
   }
   $access = Invoke-RunAs @("id") -AllowFailure
   if ($access.Code -ne 0) {
-    throw "Cannot write the app's private storage ($($access.Lines -join " ")). A debug build must be installed: deploy the app with -Mode App."
+    throw "Cannot write the app's private storage ($($access.Lines -join " ")). adb only can for a debug build: deploy the app with -Mode App."
   }
 }
 
@@ -478,7 +492,7 @@ function Show-Plan {
   Write-Host ""
   Write-Host "Dry run: nothing was changed." -ForegroundColor Yellow
   if ($Task -ne "Songs") {
-    Write-Host "  app   : native core, gradlew assembleDebug, install on $script:Model"
+    Write-Host "  app   : native core, gradlew assemble$Build, install on $script:Model"
   }
   if ($Plan) {
     foreach ($song in $Plan.Songs) {
@@ -524,7 +538,7 @@ function Select-Mode {
   }
   $modes = @(
     @{ Value = "Both"; Label = "both  : install app + sync songs and setlists" },
-    @{ Value = "App"; Label = "app   : build and install the debug APK" },
+    @{ Value = "App"; Label = "app   : build and install the $Build APK" },
     @{ Value = "Songs"; Label = "songs : sync songs and setlists only" }
   )
   Write-Host "Deploy to $($script:Model):" -ForegroundColor Cyan
@@ -572,7 +586,7 @@ function Ensure-JavaHome {
   }
 }
 
-function Install-App {
+function Initialize-Native {
   $builder = Join-Path $ClientRoot "build-android.ps1"
   $nativeLibrary = Join-Path $AndroidProject "app\src\main\jniLibs\arm64-v8a\libmbp_ffi.so"
   if ($SkipNative -and (Test-Path -LiteralPath $nativeLibrary -PathType Leaf)) {
@@ -590,21 +604,33 @@ function Install-App {
   Ensure-JavaHome
   $sdk = Find-AndroidSdk
   if ($sdk) { $env:ANDROID_HOME = $sdk; $env:ANDROID_SDK_ROOT = $sdk }
+}
 
-  $apk = Join-Path $AndroidProject "app\build\outputs\apk\debug\app-debug.apk"
-  Write-Host "==> gradlew assembleDebug ..." -ForegroundColor Cyan
+# Builds the debug or the release APK; returns its path.
+function Build-Apk {
+  param([ValidateSet("Debug", "Release")][string]$Variant)
+  $lower = $Variant.ToLowerInvariant()
+  $task = "assemble$Variant"
+  $apk = Join-Path $AndroidProject "app\build\outputs\apk\$lower\app-$lower.apk"
+  Write-Host "==> gradlew $task ..." -ForegroundColor Cyan
   Push-Location -LiteralPath $AndroidProject
   try {
-    $result = Invoke-Tool -FilePath (Join-Path $AndroidProject "gradlew.bat") -Arguments @("assembleDebug", "--console=plain") -Live -AllowFailure
+    $result = Invoke-Tool -FilePath (Join-Path $AndroidProject "gradlew.bat") -Arguments @($task, "--console=plain") -Live -AllowFailure
   } finally {
     Pop-Location
   }
   if ($result.Code -ne 0) { throw "The Gradle build failed (exit $($result.Code))." }
   if (-not (Test-Path -LiteralPath $apk -PathType Leaf)) { throw "APK not found: $apk" }
+  return $apk
+}
 
-  $size = [math]::Round((Get-Item -LiteralPath $apk).Length / 1MB, 1)
+# Installs an APK over what is on the device. Both builds carry the debug key, so the
+# songs and the markers survive either way.
+function Install-Apk {
+  param([string]$Apk)
+  $size = [math]::Round((Get-Item -LiteralPath $Apk).Length / 1MB, 1)
   Write-Host "==> installing the app ($size MB) ..." -ForegroundColor Cyan
-  $install = Invoke-Adb @("install", "-r", "-d", $apk) -AllowFailure
+  $install = Invoke-Adb @("install", "-r", "-d", $Apk) -AllowFailure
   $text = $install.Lines -join " "
   if ($install.Code -ne 0 -and $text -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
     if (-not $Interactive) {
@@ -615,7 +641,7 @@ function Install-App {
       throw "Install cancelled."
     }
     Invoke-Adb @("uninstall", $Package) | Out-Null
-    $install = Invoke-Adb @("install", "-r", "-d", $apk) -AllowFailure
+    $install = Invoke-Adb @("install", "-r", "-d", $Apk) -AllowFailure
     $text = $install.Lines -join " "
     if ($install.Code -eq 0) {
       Write-Host "==> app installed. Its data was wiped, so the songs need a sync." -ForegroundColor Yellow
@@ -623,10 +649,42 @@ function Install-App {
   }
   if ($install.Code -ne 0) { throw "adb install failed: $text" }
   Write-Host "==> app installed" -ForegroundColor Green
-  if (-not $NoLaunch) {
-    Invoke-Adb @("shell", "am", "start", "-n", $Activity) | Out-Null
-    Write-Host "==> app started on the device"
+}
+
+# Android installs a release build as bytecode and compiles it in the background over the
+# days that follow. Doing it now is where the speed of that build comes from. A debug
+# build stays bytecode by design: Android only verifies those.
+function Compile-App {
+  Write-Host "==> compiling the installed app ahead of time ..." -ForegroundColor Cyan
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $result = Invoke-Adb @("shell", "cmd", "package", "compile", "-m", "speed", $Package) -AllowFailure
+  $seconds = [int]$clock.Elapsed.TotalSeconds
+  $text = $result.Lines -join " "
+  if ($result.Code -eq 0 -and $text -match "Success") {
+    Write-Host ("==> compiled in {0:N0}s" -f $seconds) -ForegroundColor Green
+  } else {
+    Write-Host "==> not compiled ($text). The app starts as bytecode and warms up while it runs." -ForegroundColor Yellow
   }
+}
+
+# adb can only write the storage of a debug build. To copy songs into a release install,
+# the debug build stands in while the files move, and the release build goes back on
+# afterwards. Neither install touches the songs and the markers.
+# Returns the build to put back, or nothing when the device has a debug build.
+function Enter-SyncBuild {
+  $installed = (Invoke-Adb @("shell", "pm", "path", $Package) -AllowFailure).Code -eq 0
+  if (-not $installed -or (Invoke-RunAs @("id") -AllowFailure).Code -eq 0) { return $null }
+  Write-Host "==> the device has the release build, which adb cannot write to: the debug build stands in for the sync" -ForegroundColor Yellow
+  Initialize-Native
+  Install-Apk (Build-Apk "Debug")
+  return "Release"
+}
+
+function Exit-SyncBuild {
+  param([string]$Restore)
+  if (-not $Restore) { return }
+  Write-Host "==> putting the $Restore build back on the device ..." -ForegroundColor Cyan
+  Install-Apk (Build-Apk $Restore)
 }
 
 function Sync-Songs {
@@ -718,10 +776,29 @@ function Invoke-Deploy {
     return
   }
 
-  if ($task -ne "Songs") { Install-App }
+  $wasRunning = Test-AppRunning
+  $installed = $false
+  if ($task -ne "Songs") {
+    Initialize-Native
+    Install-Apk (Build-Apk $Build)
+    $installed = $true
+  }
+  $restore = $null
   if ($plan) {
-    $plan = Confirm-SongPlan (Complete-SongPlan $plan)
-    if ($plan) { Sync-Songs $plan }
+    $restore = Enter-SyncBuild
+    try {
+      $plan = Confirm-SongPlan (Complete-SongPlan $plan)
+      if ($plan) { Sync-Songs $plan }
+    } finally {
+      Exit-SyncBuild $restore
+    }
+  }
+  # the build that ends up on the device
+  $final = if ($restore) { $restore } elseif ($installed) { $Build } else { $null }
+  if ($final -eq "Release") { Compile-App }
+  if (-not $NoLaunch -and ($installed -or ($restore -and $wasRunning))) {
+    Invoke-Adb @("shell", "am", "start", "-n", $Activity) | Out-Null
+    Write-Host "==> app started on the device"
   }
   Write-Host ""
   Write-Host "Done." -ForegroundColor Green

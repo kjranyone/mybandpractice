@@ -10,6 +10,7 @@ crate-type = ["lib", "cdylib"]
 name = "mbp_ffi"
 
 [dependencies]
+jni = "0.21"
 mbp-core = { path = "../core" }
 thiserror = "2"
 uniffi = "0.29"

@@ -81,6 +81,12 @@ impl Transport {
     }
 }
 
+/// Stands in for a stem that has no gain slot. It stays silent, like a missing slot did.
+const SILENT: StemGain = StemGain {
+    current: 0.0,
+    target: 0.0,
+};
+
 struct Shared {
     song: Mutex<Option<Arc<Song>>>,
     transport: Mutex<Transport>,
@@ -359,12 +365,16 @@ impl Engine {
             transport.buffering = false;
             let intra = (transport.position % chunk_frames) as usize;
             let mut available = usize::MAX;
+            // Each stem's chunk with its gain taken out for this run. The gains ramp on the
+            // copies and go back below: looking a stem name up for every sample cost more
+            // than the mix itself.
             let mut chunks = Vec::with_capacity(song.stems.len());
-            for si in 0..song.stems.len() {
+            for (si, name) in song.stems.iter().enumerate() {
                 match song.chunk(si, idx) {
                     Some(chunk) => {
                         available = available.min(chunk.frames.saturating_sub(intra));
-                        chunks.push(chunk);
+                        let gain = transport.gains.get(name).copied().unwrap_or(SILENT);
+                        chunks.push((chunk, gain));
                     }
                     None => {
                         available = 0;
@@ -389,20 +399,20 @@ impl Engine {
                 let master = advance(&mut transport.master, ramp_samples);
                 let mut left = 0.0f32;
                 let mut right = 0.0f32;
-                for (si, name) in song.stems.iter().enumerate() {
-                    let gain = transport
-                        .gains
-                        .get_mut(name)
-                        .map(|g| advance(g, ramp_samples))
-                        .unwrap_or(0.0);
-                    let base = (intra + frame) * channels;
-                    let g = gain * master;
-                    left += chunks[si].samples[base] * g;
-                    right += chunks[si].samples[base + 1] * g;
+                let base = (intra + frame) * channels;
+                for (chunk, gain) in chunks.iter_mut() {
+                    let g = advance(gain, ramp_samples) * master;
+                    left += chunk.samples[base] * g;
+                    right += chunk.samples[base + 1] * g;
                 }
                 let o = (wrote + frame) * channels;
                 out[o] = left;
                 out[o + 1] = right;
+            }
+            for ((_, gain), name) in chunks.iter().zip(&song.stems) {
+                if let Some(slot) = transport.gains.get_mut(name) {
+                    slot.current = gain.current;
+                }
             }
             wrote += n;
             transport.position += n as u64;
@@ -480,6 +490,12 @@ fn render_shaped(
     }
     let mut wrote = 0usize;
     let lead = (song.sample_rate as f64 * PREFETCH_LEAD_SECONDS) as u64;
+    // Taken out for this call and put back after it, like in `Engine::render`.
+    let mut gains: Vec<StemGain> = song
+        .stems
+        .iter()
+        .map(|name| transport.gains.get(name).copied().unwrap_or(SILENT))
+        .collect();
 
     while wrote < frames {
         if cursor >= duration as f64 {
@@ -517,7 +533,7 @@ fn render_shaped(
         let mut wet_r = 0.0f32;
         let mut dry_l = 0.0f32;
         let mut dry_r = 0.0f32;
-        for (si, name) in song.stems.iter().enumerate() {
+        for (si, stem) in gains.iter_mut().enumerate() {
             let (a_l, a_r) = read_frame(song, si, frame);
             let (b_l, b_r) = if need_next {
                 read_frame(song, si, next)
@@ -526,12 +542,7 @@ fn render_shaped(
             };
             let sample_l = a_l + (b_l - a_l) * frac;
             let sample_r = a_r + (b_r - a_r) * frac;
-            let gain = transport
-                .gains
-                .get_mut(name)
-                .map(|g| advance(g, ramp_samples))
-                .unwrap_or(0.0)
-                * master;
+            let gain = advance(stem, ramp_samples) * master;
             if drums_dry && Some(si) == drum_at {
                 dry_l += sample_l * gain;
                 dry_r += sample_r * gain;
@@ -565,6 +576,11 @@ fn render_shaped(
         }
     }
 
+    for (name, gain) in song.stems.iter().zip(&gains) {
+        if let Some(slot) = transport.gains.get_mut(name) {
+            slot.current = gain.current;
+        }
+    }
     if cursor >= duration as f64 {
         transport.position = duration;
         transport.pos_frac = 0.0;

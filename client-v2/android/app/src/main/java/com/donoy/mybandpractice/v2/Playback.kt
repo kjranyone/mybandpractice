@@ -20,6 +20,9 @@ private const val AUDIOFOCUS_LOSS_TRANSIENT_EXCLUSIVE = 4
 object Playback {
     @Volatile var player: Player? = null
         private set
+    /** The player's JNI side, for the calls that run dozens of times a second. */
+    @Volatile var audio: NativeAudio? = null
+        private set
     @Volatile var feeder: PcmFeeder? = null
         private set
     /** Why there is no audio output, or null. */
@@ -67,9 +70,17 @@ object Playback {
             error = err.message ?: err.toString()
             null
         }
-        feeder = player?.let { engine ->
+        audio = player?.let { engine ->
             try {
-                PcmFeeder(engine).also { it.start() }
+                NativeAudio(engine)
+            } catch (err: Throwable) {
+                error = err.message ?: "音声出力を開けません"
+                null
+            }
+        }
+        feeder = audio?.let { bridge ->
+            try {
+                PcmFeeder(bridge).also { it.start() }
             } catch (err: Throwable) {
                 error = err.message ?: "音声出力を開けません"
                 null
