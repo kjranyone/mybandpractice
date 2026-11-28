@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -37,11 +39,68 @@ import com.donoy.mybandpractice.v2.Marker
 import com.donoy.mybandpractice.v2.PracticeModel
 import com.donoy.mybandpractice.v2.StanzaTag
 import com.donoy.mybandpractice.v2.formatTimePrecise
+import com.donoy.mybandpractice.v2.markerNear
+
+/**
+ * The panel of a stanza that has no mark yet. Nothing happens before one of its keys is
+ * tapped: a mark where the song is now, a mark near the playhead or elsewhere in the song
+ * tied to the stanza instead, and for a tag of the old kind on it a time of its own or its
+ * end. Opens from the key in the gutter of the stanza.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun StanzaSheet(model: PracticeModel, stanzaIndex: Int, onClose: () -> Unit) {
+    // What was near the playhead when the panel opened is what is offered.
+    val near = remember { markerNear(model.markers, model.position.toDouble())?.takeIf { it.stanzaIndex != stanzaIndex } }
+    val others = remember { model.markers.filter { it.stanzaIndex != stanzaIndex && it.id != near?.id } }
+    val tags = remember { model.stanzaTags.filter { it.stanzaIndex == stanzaIndex } }
+    Sheet(onClose) {
+        SectionTitle("このスタンザのマーク")
+        Key("今の位置にマークを追加", strong = true, modifier = Modifier.fillMaxWidth(), trailing = { Playhead(model, Mbp.Ink) }) {
+            model.markStanza(stanzaIndex)
+            onClose()
+        }
+        if (near != null) {
+            Key("近くのマーク「${near.label} ${formatTimePrecise(near.time)}」を紐付ける", modifier = Modifier.fillMaxWidth()) {
+                model.linkMarkToStanza(near.id, stanzaIndex)
+                onClose()
+            }
+        }
+        if (others.isNotEmpty()) {
+            SectionTitle("ほかのマークを紐付ける")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                others.forEach { mark ->
+                    Chip("${mark.label} ${formatTimePrecise(mark.time)}", active = false) {
+                        model.linkMarkToStanza(mark.id, stanzaIndex)
+                        onClose()
+                    }
+                }
+            }
+        }
+        if (tags.isNotEmpty()) {
+            SectionTitle("このスタンザのタグ")
+            tags.forEach { tag ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TagLabel(tag.label)
+                    Key("時刻を付ける", modifier = Modifier.weight(1f)) {
+                        model.anchorStanzaTag(tag.id)
+                        onClose()
+                    }
+                    Key("削除", danger = true) {
+                        model.removeStanzaTag(tag.id)
+                        onClose()
+                    }
+                }
+            }
+        }
+    }
+}
 
 /**
  * One mark, or one tag of the old kind, over the rest of the screen: its name, its place in
- * the song, the loop of its section, and its end. Opens from a chip that is held down, in the
- * lyrics or on the waveform.
+ * the song, the loop of its section, and its end. Opens from the key in the gutter of a
+ * stanza that has a mark, and from a chip that is held down, in the lyrics or on the
+ * waveform.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,9 +112,20 @@ fun SectionSheet(model: PracticeModel, markerId: String?, tagId: String?, onClos
         LaunchedEffect(Unit) { onClose() }
         return
     }
+    Sheet(onClose) {
+        when {
+            mark != null -> MarkEditor(model, mark, onClose)
+            tag != null -> TagEditor(model, tag, onClose)
+        }
+    }
+}
+
+/** The bottom sheet they all come in: opened in full at once, as half of it would cut off the keys. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun Sheet(onClose: () -> Unit, content: @Composable () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onClose,
-        // opened in full at once: half of it would cut off the loop key, which is the point
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = Mbp.BgElevated,
         scrimColor = Color(0xC4000000),
@@ -69,10 +139,7 @@ fun SectionSheet(model: PracticeModel, markerId: String?, tagId: String?, onClos
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            when {
-                mark != null -> MarkEditor(model, mark, onClose)
-                tag != null -> TagEditor(model, tag, onClose)
-            }
+            content()
         }
     }
 }
@@ -111,12 +178,25 @@ private fun MarkEditor(model: PracticeModel, mark: Marker, onClose: () -> Unit) 
         }
     }
     SectionTitle("位置")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Key("今の再生位置をこのマークに指定", modifier = Modifier.fillMaxWidth(), trailing = { Playhead(model, Mbp.Accent) }) {
+        model.updateMarker(live.id, time = model.position.toDouble())
+    }
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         Key("−1 s") { model.updateMarker(live.id, time = (live.time - 1.0).coerceIn(0.0, end)) }
         Key("−0.1") { model.updateMarker(live.id, time = (live.time - 0.1).coerceIn(0.0, end)) }
+        Text(
+            formatTimePrecise(live.time),
+            color = Mbp.Accent,
+            fontFamily = Mbp.Mono,
+            fontSize = Mbp.type.body,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp),
+        )
         Key("+0.1") { model.updateMarker(live.id, time = (live.time + 0.1).coerceIn(0.0, end)) }
         Key("+1 s") { model.updateMarker(live.id, time = (live.time + 1.0).coerceIn(0.0, end)) }
-        Key("今の位置") { model.updateMarker(live.id, time = model.position.toDouble()) }
     }
     SectionTitle("区間")
     Key("この区間をループ", strong = true, modifier = Modifier.fillMaxWidth()) {
@@ -164,6 +244,12 @@ private fun TagEditor(model: PracticeModel, tag: StanzaTag, onClose: () -> Unit)
     }
 }
 
+/** Where the song is now, as the sheet is open. Only this text follows the playhead. */
+@Composable
+private fun Playhead(model: PracticeModel, color: Color) {
+    Text(formatTimePrecise(model.position.toDouble()), color = color, fontFamily = Mbp.Mono, fontSize = Mbp.type.body, fontWeight = FontWeight.SemiBold)
+}
+
 /** A key of the sheet: the colour says what it does, orange for the one that is the point. */
 @Composable
 private fun Key(
@@ -172,21 +258,12 @@ private fun Key(
     strong: Boolean = false,
     danger: Boolean = false,
     enabled: Boolean = true,
+    trailing: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(10.dp)
-    Text(
-        label,
-        color = when {
-            !enabled -> Mbp.Faint
-            danger -> Mbp.Danger
-            strong -> Mbp.Ink
-            else -> Mbp.Text
-        },
-        fontSize = Mbp.type.body,
-        fontWeight = if (strong) FontWeight.SemiBold else FontWeight.Normal,
-        textAlign = TextAlign.Center,
-        modifier = modifier
+    Row(
+        modifier
             .clip(shape)
             .background(if (strong) Mbp.Sc else Mbp.Bg)
             .then(
@@ -198,5 +275,39 @@ private fun Key(
             )
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            color = when {
+                !enabled -> Mbp.Faint
+                danger -> Mbp.Danger
+                strong -> Mbp.Ink
+                else -> Mbp.Text
+            },
+            fontSize = Mbp.type.body,
+            fontWeight = if (strong) FontWeight.SemiBold else FontWeight.Normal,
+            textAlign = TextAlign.Center,
+        )
+        trailing?.invoke()
+    }
+}
+
+/** The name of a tag of the old kind, as it stands on its stanza. */
+@Composable
+private fun TagLabel(label: String) {
+    Text(
+        label,
+        color = Mbp.Muted,
+        fontFamily = Mbp.Mono,
+        fontSize = Mbp.type.caption,
+        modifier = Modifier
+            .heightIn(min = 32.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(Mbp.Bg)
+            .border(1.dp, Mbp.BorderStrong, RoundedCornerShape(999.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .wrapContentHeight(Alignment.CenterVertically),
     )
 }
