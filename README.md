@@ -70,6 +70,10 @@ mybandpractice/
 │   ├── convert-audio.py      # main/stems の一括トランスコード (ogg/flac/mp3)
 │   ├── mbp.py                # bin/ 共通ヘルパー (ffmpeg/ffprobe, 曲走査, 指紋)
 │   └── sync.ps1              # Android 実機デプロイ & 音源同期 (チャンク自動生成)
+├── dev.ps1                 # v2 クライアントの開発ランチャー (Windows クライアントの起動、Android 端末へのデプロイ)
+├── client-v2/              # ネイティブクライアント (Windows GPUI / Android) と共通の Rust コア
+│   ├── build-android.ps1   # Rust コアの Android クロスコンパイルと Kotlin バインディングの更新
+│   └── deploy-android.ps1  # v2 Android アプリのビルド・インストールと楽曲ライブラリの転送
 ├── config.example.yaml     # 歌詞フェッチャー等の設定テンプレート
 ├── pyproject.toml          # uv による Python 環境定義 (torch XPU ビルド)
 ├── tools/btc/              # BTC-ISMIR19 クローン (初回実行時に自動クローン, Git除外)
@@ -111,12 +115,28 @@ mybandpractice/
 Rust の MSVC ツールチェーンと、Visual Studio Build Tools の「C++ によるデスクトップ開発」が必要です。リポジトリのルートで実行します。
 
 ```powershell
-.\dev.ps1
-.\dev.ps1 -Release
-.\dev.ps1 -Library "D:\Music\songs"
+.\dev.ps1                                 # メニューを表示 (Enter で Windows クライアントを起動)
+.\dev.ps1 -Release                        # メニューなしでリリースビルドを起動
+.\dev.ps1 -Library "D:\Music\songs"       # ライブラリを指定して起動 (次回から既定のライブラリになる)
+.\dev.ps1 -Android                        # 接続中の Android 端末へ、内容 (app / songs / both) と端末を選んでデプロイ
+.\dev.ps1 -Android Both -Serial <serial>  # 確認なしでアプリをインストールして楽曲を転送
 ```
 
-既定では開発ビルドで起動し、リポジトリの `songs` を読み込みます。サイドバーのライブラリ名から現在のフォルダーを確認でき、`Change folder…` で変更できます。
+```text
+My Band Practice
+  Library: D:\Music\songs
+
+  [1] Run the Windows client (debug)
+  [2] Run the Windows client (release)
+  [3] Android: install app + sync songs
+  [4] Android: install app
+  [5] Android: sync songs
+  [6] Change library folder
+  [0] Exit
+Choice [0-6, Enter=1]:
+```
+
+引数なしではメニューが表示され、Enter で Windows クライアント (開発ビルド) が起動します。ライブラリは `-Library` またはメニューの `[6]` で選ぶと `%LOCALAPPDATA%\MyBandPractice\dev.library.txt` に記憶され、クライアントの起動にもデプロイにも使われます (未選択の場合はリポジトリの `songs` を読み込みます)。標準入力がターミナルでない場合 (パイプやエージェントからの実行) はメニューを省略し、Windows クライアントを起動します。サイドバーのライブラリ名から現在のフォルダーを確認でき、`Change folder…` で変更できます。
 
 スペースで再生・一時停止、左右キーで 5 秒ずつシークします。曲全体の波形をクリック、またはドラッグして再生位置を変更できます。
 
@@ -134,6 +154,24 @@ Rust の MSVC ツールチェーンと、Visual Studio Build Tools の「C++ に
 ```powershell
 cargo build --release --locked --manifest-path client-v2/Cargo.toml -p mbp-windows
 ```
+
+#### Android ネイティブ版 (client-v2) へのデプロイ
+
+`client-v2\deploy-android.ps1` は、USB 接続した端末に v2 Android アプリをビルド・インストールし、楽曲ライブラリをアプリの内部ストレージへ転送します (`dev.ps1` のメニューからも呼び出せます)。`adb`、Android NDK、JDK 17 以上が必要です。
+
+```powershell
+client-v2\deploy-android.ps1                                          # 対話式: app / songs / both を選択
+client-v2\deploy-android.ps1 -Mode Songs -Library "D:\Music\songs"    # 再ビルドせずに楽曲とセットリストを転送
+client-v2\deploy-android.ps1 -Mode Both -Serial <serial> -SkipNative  # Rust 側に変更がなければネイティブビルドを省略
+client-v2\deploy-android.ps1 -Mode Songs -DryRun                      # 転送内容の確認のみ (何も変更しない)
+```
+
+- **App**: `build-android.ps1` (Rust コアのクロスコンパイルと Kotlin バインディングの更新) → `gradlew assembleDebug` → `adb install` の順に進み、インストール後にアプリを起動します。
+- **Songs**: チャンクがある曲は `stems/chunks` と曲フォルダー直下のファイル (本体音源、`meta.json`、`lyrics.md`、`chords.json` など) のみを転送し、全ファイルのステムは送りません。チャンク未生成の曲はスキップされます。対話実行時は全曲、または番号・スラグで曲を選べます (スクリプトからは `-Songs`)。
+- 端末で作成した `practice.json` (マーカー、スタンザタグ) は保持され、ライブラリに存在しない曲・セットリストもそのまま残ります (`-Prune` で削除、対話実行時は確認します)。
+- アプリは内部ストレージ (`files/songs`, `files/setlists`) を読むため、転送は `adb push` → `run-as` で行います。端末にはデバッグビルド (`-Mode App` でインストールされるもの) が必要です。
+
+> Web 版 (Capacitor) のデプロイは従来どおり `bin/sync.ps1` を使います。
 
 ### 1. リポジトリのクローン & 初期設定
 
