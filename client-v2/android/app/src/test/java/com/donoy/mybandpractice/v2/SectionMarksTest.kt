@@ -22,14 +22,21 @@ class SectionMarksTest {
     fun theMarkNearThePlayheadIsTheNearestOne() {
         assertEquals("1A", markerNear(marks, 13.0)?.label)
         assertEquals("1B", markerNear(marks, 39.2)?.label)
-        assertNull(markerNear(marks, 20.0))
+        // the one behind counts as much as the one ahead
+        assertEquals("1A", markerNear(marks, 10.0)?.label)
     }
 
     @Test
     fun nothingIsNearWhenThePlayheadIsFarFromEveryMark() {
-        assertNull(markerNear(marks, -3.0))
+        assertNull(markerNear(marks, 25.0))
         assertNull(markerNear(marks, 300.0))
         assertNull(markerNear(emptyList(), 12.5))
+    }
+
+    @Test
+    fun howFarCountsAsNearIsAQuestionOfTheWindow() {
+        assertEquals("1A", markerNear(marks, 15.0, window = 3.0)?.label)
+        assertNull(markerNear(marks, 15.0, window = 2.0))
     }
 
     @Test

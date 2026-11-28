@@ -131,15 +131,16 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
     var chordsOpen by remember { mutableStateOf(false) }
     var manageOpen by remember { mutableStateOf(false) }
     var syncOpen by remember { mutableStateOf(false) }
-    // The mark, or the tag of the old kind, that is open in the sheet.
+    // The mark, the tag of the old kind, or the stanza without a mark that is open in a sheet.
     var editingMark by remember { mutableStateOf<String?>(null) }
     var editingTag by remember { mutableStateOf<String?>(null) }
+    var markingStanza by remember { mutableStateOf<Int?>(null) }
     val density = LocalDensity.current
     val drawerProgress = remember { mutableFloatStateOf(if (listOpenState.value) 1f else 0f) }
     val drawerAnim = remember { mutableStateOf<Job?>(null) }
     val drawerGen = remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
-    val gestureBlocked = rememberUpdatedState(chordsOpen || manageOpen || syncOpen || editingMark != null || editingTag != null)
+    val gestureBlocked = rememberUpdatedState(chordsOpen || manageOpen || syncOpen || editingMark != null || editingTag != null || markingStanza != null)
     val rootOriginState = remember { mutableStateOf(Offset.Zero) }
     var rootOrigin by rootOriginState
     val toggleRectState = remember { mutableStateOf(Rect.Zero) }
@@ -221,6 +222,7 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
                         )
                         Lyrics(
                             model,
+                            onAddMark = { markingStanza = it },
                             onEditMark = { editingMark = it },
                             onEditTag = { editingTag = it },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -230,6 +232,7 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
                 } else {
                     Lyrics(
                         model,
+                        onAddMark = { markingStanza = it },
                         onEditMark = { editingMark = it },
                         onEditTag = { editingTag = it },
                         modifier = Modifier.fillMaxSize(),
@@ -443,6 +446,10 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
             onImport = { picker.launch(null) },
         )
     }
+    val stanzaToMark = markingStanza
+    if (stanzaToMark != null) {
+        StanzaSheet(model, stanzaToMark) { markingStanza = null }
+    }
     if (editingMark != null || editingTag != null) {
         SectionSheet(model, editingMark, editingTag) {
             editingMark = null
@@ -655,6 +662,7 @@ private val CardPadTop = 16.dp
 @Composable
 private fun Lyrics(
     model: PracticeModel,
+    onAddMark: (Int) -> Unit,
     onEditMark: (String) -> Unit,
     onEditTag: (String) -> Unit,
     modifier: Modifier,
@@ -732,7 +740,7 @@ private fun Lyrics(
                 }
             }
             Text(
-                "＋で今の位置にマーク。チップはタップで移動、長押しで編集。",
+                "＋でマークを追加、⋯で編集。チップはタップで移動、長押しでも編集。",
                 color = Mbp.Faint,
                 fontSize = Mbp.type.caption,
                 modifier = Modifier.padding(top = 10.dp, bottom = 18.dp),
@@ -780,7 +788,7 @@ private fun Lyrics(
                                         tags,
                                         activeMarkId = activeId,
                                         current = idx == activeStanza,
-                                        onMark = { model.markStanza(idx) },
+                                        onAdd = { onAddMark(idx) },
                                         onEditMark = onEditMark,
                                         onEditTag = onEditTag,
                                         modifier = Modifier.onGloballyPositioned { stanzaTops[idx] = it.positionInParent().y },
@@ -796,10 +804,11 @@ private fun Lyrics(
 }
 
 /**
- * One stanza of the lyrics with its marks. The key in the gutter puts the start of the
- * stanza where the song is now; it stands only where there is no mark yet, for a stanza that
- * has one shows the mark instead. The chips go to their mark with a tap and open it for
- * editing when they are held down. The stanza the song is in is lit.
+ * One stanza of the lyrics with its marks. The key in the gutter opens a sheet: on a stanza
+ * without a mark it is "＋", and the sheet puts one where the song is or ties one to the
+ * stanza; on a stanza with a mark it is "⋯", and the sheet edits the first of them. The chips
+ * go to their mark with a tap and open it for editing when they are held down. The stanza
+ * the song is in is lit.
  */
 @Composable
 private fun StanzaBlock(
@@ -809,26 +818,34 @@ private fun StanzaBlock(
     tags: List<StanzaTag>,
     activeMarkId: String?,
     current: Boolean,
-    onMark: () -> Unit,
+    onAdd: () -> Unit,
     onEditMark: (String) -> Unit,
     onEditTag: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(modifier.fillMaxWidth()) {
         Box(Modifier.width(StanzaGutter), contentAlignment = Alignment.TopCenter) {
-            if (marks.isEmpty()) {
-                Box(
-                    Modifier
-                        .padding(top = 3.dp)
-                        .size(StanzaKey)
-                        .clip(CircleShape)
-                        .background(if (current) Mbp.Accent else Mbp.Bg)
-                        .border(1.dp, Mbp.BorderStrong, CircleShape)
-                        .clickable(onClick = onMark),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("＋", color = if (current) Mbp.Ink else Mbp.Muted, fontSize = Mbp.type.body, fontWeight = FontWeight.SemiBold)
-                }
+            val first = marks.firstOrNull()
+            Box(
+                Modifier
+                    .padding(top = 3.dp)
+                    .size(StanzaKey)
+                    .clip(CircleShape)
+                    .background(if (current) Mbp.Accent else Mbp.Bg)
+                    .border(1.dp, if (first == null) Mbp.BorderStrong else Mbp.Accent.copy(alpha = 0.7f), CircleShape)
+                    .clickable { if (first == null) onAdd() else onEditMark(first.id) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (first == null) "＋" else "⋯",
+                    color = when {
+                        current -> Mbp.Ink
+                        first == null -> Mbp.Muted
+                        else -> Mbp.Accent
+                    },
+                    fontSize = Mbp.type.body,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
         }
         Column(

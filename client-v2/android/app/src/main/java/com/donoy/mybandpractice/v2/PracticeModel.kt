@@ -384,19 +384,16 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Puts the start of a stanza where the song is now: a mark at the playhead, tied to that
-     * stanza. A mark that is already within a moment of the playhead is tied to the stanza
-     * instead, so that a second tap does not make a twin of it.
+     * Puts the start of a stanza where the song is now: a mark at the playhead with the
+     * first name that no mark has yet, tied to that stanza.
      */
     fun markStanza(stanzaIndex: Int) {
         if (current == null) return
-        val now = position.toDouble()
-        val near = markerNear(markers, now)
-        when {
-            near == null -> addMarker(now, nextMarkLabel(markers), stanzaIndex)
-            near.stanzaIndex != stanzaIndex -> updateMarker(near.id, stanzaIndex = stanzaIndex)
-        }
+        addMarker(position.toDouble(), nextMarkLabel(markers), stanzaIndex)
     }
+
+    /** Ties a mark to a stanza: the section starts there, and the stanza shows it. */
+    fun linkMarkToStanza(id: String, stanzaIndex: Int) = updateMarker(id, stanzaIndex = stanzaIndex)
 
     /**
      * Loops the section that starts at a mark, up to the next mark or to the end of the

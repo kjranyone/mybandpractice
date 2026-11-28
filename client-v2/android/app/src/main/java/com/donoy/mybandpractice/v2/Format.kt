@@ -76,12 +76,12 @@ fun nextMarkLabel(markers: List<Marker>): String {
     return MARKER_PRESETS.firstOrNull { it !in used } ?: "M${markers.size + 1}"
 }
 
-/** How far from the playhead a mark may be to count as the one that was meant. */
-const val MARK_LINK_WINDOW = 2.0
+/** How far from the playhead a mark may be to be offered as the one that was meant. */
+const val MARK_NEAR_WINDOW = 5.0
 
-/** The mark within [MARK_LINK_WINDOW] seconds of a time, the nearest one. */
-fun markerNear(markers: List<Marker>, time: Double): Marker? =
-    markers.filter { abs(it.time - time) <= MARK_LINK_WINDOW }.minByOrNull { abs(it.time - time) }
+/** The mark within [window] seconds of a time, the nearest one. */
+fun markerNear(markers: List<Marker>, time: Double, window: Double = MARK_NEAR_WINDOW): Marker? =
+    markers.filter { abs(it.time - time) <= window }.minByOrNull { abs(it.time - time) }
 
 /**
  * Where the section that starts at [start] ends: at the next mark that leaves a loop long
