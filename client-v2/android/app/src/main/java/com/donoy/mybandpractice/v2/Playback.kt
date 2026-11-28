@@ -97,6 +97,7 @@ object Playback {
             return
         }
         engine.play()
+        feeder?.wake()
         PlaybackService.running(app)
     }
 

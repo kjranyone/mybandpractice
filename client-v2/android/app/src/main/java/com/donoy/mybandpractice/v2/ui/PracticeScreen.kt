@@ -599,6 +599,7 @@ private fun EqMarks(position: State<Float>) {
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom, modifier = Modifier.height(12.dp)) {
         EqOffsets.forEach { offset ->
             // The bars scale their layer only: a height would lay the row out on every update.
+            // The layer clips to its bounds so that each update has only the mark repainted.
             Box(
                 Modifier
                     .width(2.dp)
@@ -607,6 +608,7 @@ private fun EqMarks(position: State<Float>) {
                         val wave = 0.5f + 0.5f * sin(position.value * EQ_SPEED + offset)
                         scaleY = 0.4f + 0.6f * wave
                         transformOrigin = TransformOrigin(0.5f, 1f)
+                        clip = true
                     }
                     .background(Mbp.Accent, RoundedCornerShape(1.dp)),
             )
