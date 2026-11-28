@@ -133,6 +133,12 @@ fun setlistIdFor(name: String, existing: List<SetlistRecord>): String {
     return id
 }
 
+/** The song folder with that slug, or null when the library does not have it. */
+fun songAt(context: Context, slug: String): SongRecord? {
+    val dir = File(songsRoot(context), slug)
+    return if (dir.isDirectory && songLooksPresent(dir)) readSong(dir) else null
+}
+
 fun loadPractice(dir: File): PracticeFile {
     val file = File(dir, "practice.json")
     if (!file.isFile) return PracticeFile(emptyList(), emptyList())

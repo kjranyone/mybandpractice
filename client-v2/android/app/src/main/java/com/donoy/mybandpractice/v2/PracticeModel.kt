@@ -36,7 +36,6 @@ fun playbackModeLabel(mode: PlaybackMode): String = when (mode) {
 class PracticeModel(app: Application) : AndroidViewModel(app) {
     val player: Player?
     val nativeError: String?
-    private val feeder: PcmFeeder?
     private val prefs = app.getSharedPreferences("mbp", Application.MODE_PRIVATE)
     private var saveJob: Job? = null
     private var peakJob: Job? = null
@@ -130,25 +129,52 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
         }
 
     init {
-        val opened = try {
-            Player() to null
-        } catch (err: Throwable) {
-            null to (err.message ?: err.toString())
-        }
-        player = opened.first
-        nativeError = opened.second
-        feeder = player?.let { PcmFeeder(it).also { feeder -> feeder.start() } }
+        // The engine and its output belong to the process, not to this model: a song
+        // keeps playing when the activity goes to the background or is recreated.
+        Playback.open(app)
+        player = Playback.player
+        nativeError = Playback.error
         status = nativeError
-        if (modeId != null && activeSetlist == null) {
-            // resolved after reload
+        Playback.listener = object : Playback.Listener {
+            override fun adopt(song: SongRecord) {
+                // A song loaded behind this model (service restore) replaces what it shows.
+                if (current?.slug != song.slug) this@PracticeModel.adopt(song)
+            }
+
+            override fun step(direction: Int) {
+                if (current == null) Playback.current?.let { this@PracticeModel.adopt(it) }
+                stepPlaylist(direction)
+            }
         }
         reloadLibrary()
+        val loaded = Playback.current
+        if (loaded != null) {
+            adopt(loaded)
+        } else if (player != null) {
+            // after the process was dropped in the background: back to where it left off
+            Playback.restore { song ->
+                if (song != null && current == null && pendingSlug == null) adopt(song)
+            }
+        }
         viewModelScope.launch {
             while (isActive) {
                 tick()
                 delay(100)
             }
         }
+    }
+
+    /** Shows the song that is already in the engine, for example after a recreation. */
+    private fun adopt(song: SongRecord) {
+        val engine = player ?: return
+        current = song
+        duration = engine.duration().toFloat()
+        position = engine.position().toFloat()
+        endHandled = engine.ended()
+        restoreLoop(song.slug)
+        loadSidecars(song)
+        loadPeaks(song)
+        applyGains()
     }
 
     fun reloadLibrary() {
@@ -194,12 +220,11 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
 
     fun playSong(song: SongRecord) {
         val engine = player
-        val chunks = song.chunksDir
         if (engine == null) {
             status = nativeError ?: "再生コアを読み込めません"
             return
         }
-        if (chunks == null) {
+        if (song.chunksDir == null) {
             status = "chunks がありません"
             return
         }
@@ -208,13 +233,11 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
             pendingSlug = song.slug
             buffering = true
             status = null
-            val loaded = withContext(Dispatchers.IO) {
-                runCatching { engine.loadChunksDir(chunks.absolutePath) }
-            }
-            if (loaded.isFailure) {
+            val failure = withContext(Dispatchers.IO) { Playback.load(song) }
+            if (failure != null) {
                 pendingSlug = null
                 buffering = false
-                status = loaded.exceptionOrNull()?.message ?: "読み込めません"
+                status = failure.message ?: "読み込めません"
                 return@launch
             }
             current = song
@@ -225,26 +248,18 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
             loadSidecars(song)
             loadPeaks(song)
             applyGains()
-            engine.play()
+            Playback.play()
             pendingSlug = null
         }
     }
 
-    fun toggle() {
-        val engine = player ?: return
-        if (current == null) return
-        if (engine.playing()) engine.pause() else {
-            if (engine.ended()) engine.seek(0.0)
-            engine.play()
-        }
-    }
+    fun toggle() = Playback.toggle()
 
     fun seek(seconds: Double) {
-        val engine = player ?: return
-        if (current == null) return
+        if (player == null || current == null) return
         val dur = duration.toDouble().coerceAtLeast(0.0)
         val t = clamp(seconds, 0.0, (dur - 0.01).coerceAtLeast(0.0))
-        runCatching { engine.seek(t) }
+        Playback.seekTo(t)
         position = t.toFloat()
         endHandled = false
     }
@@ -404,7 +419,8 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
             song.dir.deleteRecursively()
             withContext(Dispatchers.Main) {
                 if (current?.slug == song.slug) {
-                    player?.pause()
+                    Playback.pause()
+                    Playback.forget(song.slug)
                     current = null
                     lyrics = emptyList()
                     markers = emptyList()
@@ -441,10 +457,11 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        // the song goes on in the background; the service owns it from here
+        Playback.listener = null
         saveJob?.cancel()
         current?.let { flushPractice(it) }
-        feeder?.stop()
-        player?.close()
+        Playback.saveProgress()
     }
 
     private fun tick() {
@@ -456,6 +473,7 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
         if (!dragging && current != null) position = engine.position().toFloat()
         val err = engine.lastError()
         if (err.isNotEmpty()) status = err
+        Playback.outputError?.let { status = it }
         val region = loop
         if (playing && loopEnabled && region != null && position >= region.second - 0.04) {
             seek(region.first)
@@ -467,7 +485,7 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
                 when (playbackMode) {
                     PlaybackMode.RepeatOne -> {
                         seek(0.0)
-                        engine.play()
+                        Playback.play()
                     }
                     PlaybackMode.Sequential -> stepPlaylist(1, stopAtEnd = true)
                     PlaybackMode.RepeatAll -> stepPlaylist(1, wrap = true)
@@ -487,7 +505,7 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
         var next = index + dir
         if (wrap) next = (next + list.size) % list.size
         if (next !in list.indices) {
-            if (stopAtEnd) player?.pause()
+            if (stopAtEnd) Playback.pause()
             return
         }
         playSong(list[next])
@@ -551,7 +569,7 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
 
     private fun applyMaster() {
         val gain = if (muted) 0f else volume
-        player?.setMasterGain(gain)
+        Playback.setMaster(gain)
     }
 
     private fun persistMixer() {

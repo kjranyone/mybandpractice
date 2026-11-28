@@ -36,7 +36,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -47,6 +46,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -326,12 +326,6 @@ private val ColorBgWave = androidx.compose.ui.graphics.Color(0xFF0A0C10)
 
 @Composable
 private fun Transport(model: PracticeModel, disabled: Boolean, showSkips: Boolean, modifier: Modifier = Modifier) {
-    val spin by rememberInfiniteTransition(label = "spin").animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(700, easing = LinearEasing)),
-        label = "deg",
-    )
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
         if (showSkips) {
             IconButton("⏮", !disabled, 34) { model.playPrev() }
@@ -344,11 +338,21 @@ private fun Transport(model: PracticeModel, disabled: Boolean, showSkips: Boolea
                 .size(TransportKey)
                 .clip(CircleShape)
                 .background(Mbp.Text)
-                .alpha(if (disabled) 0.35f else 1f)
+                // A layer that stays: taking Modifier.alpha(1f) out of the chain while a
+                // restored song appears left the key without its circle until the next redraw.
+                .graphicsLayer { alpha = if (disabled) 0.35f else 1f }
                 .clickable(enabled = !disabled) { model.toggle() },
             contentAlignment = Alignment.Center,
         ) {
             if (model.buffering && model.current != null) {
+                // Only there while a chunk is really loading. Kept alive all the time, this
+                // animation made the whole app redraw at 60 fps for as long as it was open.
+                val spin by rememberInfiniteTransition(label = "spin").animateFloat(
+                    initialValue = 0f,
+                    targetValue = 360f,
+                    animationSpec = infiniteRepeatable(tween(700, easing = LinearEasing)),
+                    label = "deg",
+                )
                 Canvas(Modifier.size(18.dp)) {
                     rotate(spin) {
                         drawArc(Mbp.Bg, startAngle = 0f, sweepAngle = 270f, useCenter = false, style = Stroke(2.5.dp.toPx()))
@@ -392,7 +396,7 @@ private fun RepeatKey(mode: PlaybackMode, enabled: Boolean, modifier: Modifier =
             .size(TransportKey)
             .clip(CircleShape)
             .background(if (mode == PlaybackMode.Sequential) Mbp.Text else Mbp.Sc)
-            .alpha(if (enabled) 1f else 0.35f)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.35f }
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
