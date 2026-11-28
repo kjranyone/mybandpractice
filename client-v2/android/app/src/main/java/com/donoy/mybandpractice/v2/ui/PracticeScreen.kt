@@ -732,6 +732,7 @@ private fun Lyrics(
             // The credits wrap chip by chip: a long name goes to the next line whole. The slug
             // is not shown: it is the folder's name, not something to read.
             FlowRow(
+                Modifier.padding(bottom = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -750,12 +751,6 @@ private fun Lyrics(
                     )
                 }
             }
-            Text(
-                "スタンザを長押しでマークの追加と編集。マークのあるスタンザはタップでそこへ移動。",
-                color = Mbp.Faint,
-                fontSize = Mbp.type.caption,
-                modifier = Modifier.padding(top = 10.dp, bottom = 18.dp),
-            )
         }
         item {
             Column(
