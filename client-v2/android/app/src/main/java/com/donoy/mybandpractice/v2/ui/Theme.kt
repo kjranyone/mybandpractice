@@ -50,8 +50,9 @@ object Mbp {
 }
 
 /**
- * One step of the reading scale. Phone matches the previous literals.
- * Tablet is smallest width ≥ 600dp (this 8.4" panel). Large is ≥ 840dp.
+ * One step of the reading scale. Phone keeps the ported sizes, tablet is smallest
+ * width ≥ 600dp (this 8.4" panel) and large is ≥ 840dp; a wider device steps the same
+ * roles up. No step goes under [MbpType.MinText], on any of them.
  */
 @Immutable
 class MbpType internal constructor(
@@ -73,6 +74,13 @@ class MbpType internal constructor(
     val lyricsLine: TextUnit,
 ) {
     companion object {
+        /**
+         * The smallest text there is. Smaller letters are not readable at the distance a
+         * phone or a music stand is read from, so the roles that used to sit below it
+         * (a time stamp, a bar number, a roman numeral, a stanza tag) now share this size.
+         */
+        val MinText = 12.sp
+
         val Phone = MbpType(
             display = 24.sp,
             song = 28.sp,
@@ -83,10 +91,10 @@ class MbpType internal constructor(
             body = 14.sp,
             bodySm = 13.sp,
             callout = 15.sp,
-            caption = 12.sp,
-            label = 11.sp,
-            micro = 10.sp,
-            nano = 9.sp,
+            caption = MinText,
+            label = MinText,
+            micro = MinText,
+            nano = MinText,
             iconLg = 28.sp,
             lyrics = 16.sp,
             lyricsLine = 26.sp,
@@ -102,9 +110,9 @@ class MbpType internal constructor(
             bodySm = 15.sp,
             callout = 17.sp,
             caption = 14.sp,
-            label = 12.sp,
-            micro = 11.sp,
-            nano = 10.sp,
+            label = MinText,
+            micro = MinText,
+            nano = MinText,
             iconLg = 32.sp,
             lyrics = 19.sp,
             lyricsLine = 30.sp,
@@ -121,8 +129,8 @@ class MbpType internal constructor(
             callout = 18.sp,
             caption = 15.sp,
             label = 13.sp,
-            micro = 12.sp,
-            nano = 11.sp,
+            micro = MinText,
+            nano = MinText,
             iconLg = 36.sp,
             lyrics = 21.sp,
             lyricsLine = 34.sp,
