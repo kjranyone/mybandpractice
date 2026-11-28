@@ -791,7 +791,7 @@ internal fun AppDialog(
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+internal fun SectionTitle(text: String) {
     Text(text, color = Mbp.Text, fontWeight = FontWeight.SemiBold, fontSize = Mbp.type.bodySm, modifier = Modifier.padding(top = 4.dp))
 }
 
@@ -812,7 +812,7 @@ internal fun Chip(label: String, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun fieldColors() = TextFieldDefaults.colors(
+internal fun fieldColors() = TextFieldDefaults.colors(
     focusedContainerColor = Mbp.BgElevated,
     unfocusedContainerColor = Mbp.BgElevated,
     focusedIndicatorColor = Mbp.AccentStrong,

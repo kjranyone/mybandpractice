@@ -13,12 +13,16 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,14 +31,17 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.LocalTextStyle
@@ -50,6 +57,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -75,6 +83,7 @@ import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -90,6 +99,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
+import android.os.SystemClock
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -99,9 +109,10 @@ import kotlinx.coroutines.launch
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.ViewModelProvider
 import com.donoy.mybandpractice.v2.LyricsBlock
-import com.donoy.mybandpractice.v2.MARKER_PRESETS
+import com.donoy.mybandpractice.v2.Marker
 import com.donoy.mybandpractice.v2.PracticeModel
 import com.donoy.mybandpractice.v2.R
+import com.donoy.mybandpractice.v2.StanzaTag
 import com.donoy.mybandpractice.v2.formatDuration
 import com.donoy.mybandpractice.v2.formatTimePrecise
 
@@ -120,13 +131,15 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
     var chordsOpen by remember { mutableStateOf(false) }
     var manageOpen by remember { mutableStateOf(false) }
     var syncOpen by remember { mutableStateOf(false) }
-    var tagStanza by remember { mutableStateOf<Int?>(null) }
+    // The mark, or the tag of the old kind, that is open in the sheet.
+    var editingMark by remember { mutableStateOf<String?>(null) }
+    var editingTag by remember { mutableStateOf<String?>(null) }
     val density = LocalDensity.current
     val drawerProgress = remember { mutableFloatStateOf(if (listOpenState.value) 1f else 0f) }
     val drawerAnim = remember { mutableStateOf<Job?>(null) }
     val drawerGen = remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
-    val gestureBlocked = rememberUpdatedState(chordsOpen || manageOpen || syncOpen)
+    val gestureBlocked = rememberUpdatedState(chordsOpen || manageOpen || syncOpen || editingMark != null || editingTag != null)
     val rootOriginState = remember { mutableStateOf(Offset.Zero) }
     var rootOrigin by rootOriginState
     val toggleRectState = remember { mutableStateOf(Rect.Zero) }
@@ -206,14 +219,20 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
                             onSearchBounds = { searchRect = it },
                             modifier = Modifier.width(Mbp.Sidebar).fillMaxHeight(),
                         )
-                        Lyrics(model, tagStanza, { tagStanza = it }, Modifier.weight(1f).fillMaxHeight(), topPad = 32.dp)
+                        Lyrics(
+                            model,
+                            onEditMark = { editingMark = it },
+                            onEditTag = { editingTag = it },
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                            topPad = 32.dp,
+                        )
                     }
                 } else {
                     Lyrics(
                         model,
-                        tagStanza,
-                        { tagStanza = it },
-                        Modifier.fillMaxSize(),
+                        onEditMark = { editingMark = it },
+                        onEditTag = { editingTag = it },
+                        modifier = Modifier.fillMaxSize(),
                         topPad = 72.dp,
                     )
                 }
@@ -274,6 +293,7 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
                     },
                     mixerOpen = mixerOpen,
                     compact = compactPlayer,
+                    onEditMarker = { editingMark = it },
                 )
             }
         }
@@ -422,6 +442,12 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
             onClose = { syncOpen = false },
             onImport = { picker.launch(null) },
         )
+    }
+    if (editingMark != null || editingTag != null) {
+        SectionSheet(model, editingMark, editingTag) {
+            editingMark = null
+            editingTag = null
+        }
     }
     }
 }
@@ -616,11 +642,21 @@ private fun EqMarks(position: State<Float>) {
 
 private const val EQ_SPEED = 12.0f
 
+/** The item of the lyric list that holds the card; the one before it is the head. */
+private const val CARD_ITEM = 1
+
+/** The gutter of the mark key beside a stanza, and the key in it. */
+private val StanzaGutter = 40.dp
+private val StanzaKey = 28.dp
+
+/** The top padding of the lyric card. The place of a stanza is measured without it. */
+private val CardPadTop = 16.dp
+
 @Composable
 private fun Lyrics(
     model: PracticeModel,
-    tagStanza: Int?,
-    onTag: (Int?) -> Unit,
+    onEditMark: (String) -> Unit,
+    onEditTag: (String) -> Unit,
     modifier: Modifier,
     topPad: androidx.compose.ui.unit.Dp,
 ) {
@@ -643,20 +679,42 @@ private fun Lyrics(
         return
     }
     // Follows the playhead without recomposing for each tick of it: only when the playhead
-    // reaches another marker.
+    // reaches another mark. The stanza tied to that mark is the one the song is in.
     val activeMarker by remember {
         derivedStateOf { model.markers.lastOrNull { it.time <= model.position + 0.2 } }
     }
+    val activeStanza by remember { derivedStateOf { activeMarker?.stanzaIndex } }
+    // Where each stanza sits in the card. The card is one item of the list, so following a
+    // stanza means scrolling into that item.
+    val stanzaTops = remember { HashMap<Int, Float>() }
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    // A touch on the list is somebody reading: the card does not pull away from under the
+    // finger.
+    var touchedAt by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect {
+            if (it is PressInteraction.Press || it is DragInteraction.Start) touchedAt = SystemClock.uptimeMillis()
+        }
+    }
+    LaunchedEffect(activeStanza) {
+        val stanza = activeStanza ?: return@LaunchedEffect
+        if (listState.isScrollInProgress || SystemClock.uptimeMillis() - touchedAt < 3500) return@LaunchedEffect
+        val top = stanzaTops[stanza] ?: return@LaunchedEffect
+        val offset = with(density) { (top + CardPadTop.toPx() - 12.dp.toPx()).roundToInt() }
+        listState.animateScrollToItem(CARD_ITEM, offset.coerceAtLeast(0))
+    }
     // In a layer of its own, so that a change elsewhere does not record the whole lyric again.
     LazyColumn(
-        modifier
+        modifier = modifier
             .padding(top = topPad, start = 22.dp, end = 22.dp, bottom = 24.dp)
             .graphicsLayer(),
+        state = listState,
     ) {
         item {
             Text(song.title, color = Mbp.Text, fontSize = Mbp.type.song, fontWeight = FontWeight.Bold, lineHeight = Mbp.type.songLine)
             Text(song.artist, color = Mbp.Muted, fontSize = Mbp.type.title, modifier = Modifier.padding(top = 6.dp))
-            Row(Modifier.padding(top = 12.dp, bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 MetaChip(song.slug, mono = true)
                 song.lyricist?.let { MetaChip("L: $it") }
                 song.composer?.let { MetaChip("C: $it") }
@@ -673,24 +731,31 @@ private fun Lyrics(
                     )
                 }
             }
+            Text(
+                "＋で今の位置にマーク。チップはタップで移動、長押しで編集。",
+                color = Mbp.Faint,
+                fontSize = Mbp.type.caption,
+                modifier = Modifier.padding(top = 10.dp, bottom = 18.dp),
+            )
         }
         item {
-            // Counted here, not next to the list: a variable captured from around the item
-            // gives it a new content each time the lyric recomposes.
-            var stanzaCounter = -1
             Column(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .background(Mbp.BgElevated)
                     .border(1.dp, Mbp.Border, RoundedCornerShape(12.dp))
-                    .padding(22.dp),
+                    .padding(start = 12.dp, top = CardPadTop, end = 18.dp, bottom = 12.dp),
             ) {
                 when {
-                    model.lyricsLoading -> Text("Loading lyrics…", color = Mbp.Muted)
-                    model.lyricsNote != null -> Text(model.lyricsNote ?: "", color = Mbp.Muted)
-                    model.lyrics.isEmpty() -> Text("No lyrics.md for this track.", color = Mbp.Muted)
+                    model.lyricsLoading -> Text("Loading lyrics…", color = Mbp.Muted, modifier = Modifier.padding(bottom = 12.dp))
+                    model.lyricsNote != null -> Text(model.lyricsNote ?: "", color = Mbp.Muted, modifier = Modifier.padding(bottom = 12.dp))
+                    model.lyrics.isEmpty() -> Text("No lyrics.md for this track.", color = Mbp.Muted, modifier = Modifier.padding(bottom = 12.dp))
                     else -> {
+                        // Counted here, not next to the list: a variable captured from around the
+                        // item gives it a new content each time the lyric recomposes.
+                        var stanzaCounter = -1
+                        val activeId = activeMarker?.id
                         model.lyrics.forEach { block ->
                             when (block) {
                                 is LyricsBlock.Heading -> Text(block.text, color = Mbp.Text, fontWeight = FontWeight.SemiBold, fontSize = Mbp.type.headline)
@@ -705,67 +770,21 @@ private fun Lyrics(
                                 )
                                 is LyricsBlock.Stanza -> {
                                     val idx = ++stanzaCounter
-                                    val chips = model.markers.filter { it.stanzaIndex == idx }
-                                    val tags = model.stanzaTags.filter { it.stanzaIndex == idx }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(bottom = 2.dp)) {
-                                        chips.forEach { marker ->
-                                            val on = marker.id == activeMarker?.id
-                                            Text(
-                                                marker.label,
-                                                color = if (on) Mbp.Ink else Mbp.Muted,
-                                                fontFamily = Mbp.Mono,
-                                                fontSize = Mbp.type.micro,
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(999.dp))
-                                                    .background(if (on) Mbp.Sc else Mbp.BgElevated)
-                                                    .border(1.dp, if (on) Mbp.Sc else Mbp.BorderStrong, RoundedCornerShape(999.dp))
-                                                    .clickable { model.seek(marker.time) }
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                                            )
-                                        }
-                                        tags.forEach { tag ->
-                                            val linked = model.markers.firstOrNull { it.label == tag.label }
-                                            Text(
-                                                tag.label,
-                                                color = if (linked != null) Mbp.Accent else Mbp.Muted,
-                                                fontFamily = Mbp.Mono,
-                                                fontSize = Mbp.type.micro,
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(999.dp))
-                                                    .border(1.dp, Mbp.BorderStrong, RoundedCornerShape(999.dp))
-                                                    .clickable { linked?.let { model.seek(it.time) } }
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                                            )
-                                        }
-                                        Text(
-                                            "+ tag",
-                                            color = if (tagStanza == idx) Mbp.Sc else Mbp.Faint,
-                                            fontSize = Mbp.type.micro,
-                                            modifier = Modifier
-                                                .clickable { onTag(if (tagStanza == idx) null else idx) }
-                                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                                        )
-                                    }
-                                    if (tagStanza == idx) {
-                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(bottom = 6.dp)) {
-                                            MARKER_PRESETS.take(6).forEach { preset ->
-                                                Text(
-                                                    preset,
-                                                    color = Mbp.Text,
-                                                    fontSize = Mbp.type.label,
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(999.dp))
-                                                        .background(Mbp.BgHover)
-                                                        .clickable {
-                                                            model.addStanzaTag(idx, preset)
-                                                            onTag(null)
-                                                        }
-                                                        .padding(horizontal = 6.dp, vertical = 3.dp),
-                                                )
-                                            }
-                                        }
-                                    }
-                                    Text(emphasize(block.lines.joinToString("\n")), color = Mbp.Text, fontSize = Mbp.type.lyrics, lineHeight = Mbp.type.lyricsLine, modifier = Modifier.padding(bottom = 12.dp))
+                                    val marks = model.markers.filter { it.stanzaIndex == idx }
+                                    // a tag of the old kind gives way to a mark of the same name
+                                    val tags = model.stanzaTags.filter { tag -> tag.stanzaIndex == idx && marks.none { it.label == tag.label } }
+                                    StanzaBlock(
+                                        model,
+                                        block.lines,
+                                        marks,
+                                        tags,
+                                        activeMarkId = activeId,
+                                        current = idx == activeStanza,
+                                        onMark = { model.markStanza(idx) },
+                                        onEditMark = onEditMark,
+                                        onEditTag = onEditTag,
+                                        modifier = Modifier.onGloballyPositioned { stanzaTops[idx] = it.positionInParent().y },
+                                    )
                                 }
                             }
                         }
@@ -774,6 +793,123 @@ private fun Lyrics(
             }
         }
     }
+}
+
+/**
+ * One stanza of the lyrics with its marks. The key in the gutter puts the start of the
+ * stanza where the song is now; it stands only where there is no mark yet, for a stanza that
+ * has one shows the mark instead. The chips go to their mark with a tap and open it for
+ * editing when they are held down. The stanza the song is in is lit.
+ */
+@Composable
+private fun StanzaBlock(
+    model: PracticeModel,
+    lines: List<String>,
+    marks: List<Marker>,
+    tags: List<StanzaTag>,
+    activeMarkId: String?,
+    current: Boolean,
+    onMark: () -> Unit,
+    onEditMark: (String) -> Unit,
+    onEditTag: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier.fillMaxWidth()) {
+        Box(Modifier.width(StanzaGutter), contentAlignment = Alignment.TopCenter) {
+            if (marks.isEmpty()) {
+                Box(
+                    Modifier
+                        .padding(top = 3.dp)
+                        .size(StanzaKey)
+                        .clip(CircleShape)
+                        .background(if (current) Mbp.Accent else Mbp.Bg)
+                        .border(1.dp, Mbp.BorderStrong, CircleShape)
+                        .clickable(onClick = onMark),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("＋", color = if (current) Mbp.Ink else Mbp.Muted, fontSize = Mbp.type.body, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        Column(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (current) Mbp.AccentDim else Color.Transparent)
+                .padding(horizontal = 6.dp),
+        ) {
+            if (marks.isNotEmpty() || tags.isNotEmpty()) {
+                Row(Modifier.padding(top = 2.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    marks.forEach { mark ->
+                        MarkChip(
+                            mark.label,
+                            mark.time,
+                            on = mark.id == activeMarkId,
+                            onClick = { model.seek(mark.time) },
+                            onLongClick = { onEditMark(mark.id) },
+                        )
+                    }
+                    tags.forEach { tag ->
+                        val tied = model.markers.firstOrNull { it.label == tag.label }
+                        TagChip(
+                            tag.label,
+                            tied = tied != null,
+                            onClick = { tied?.let { model.seek(it.time) } },
+                            onLongClick = { onEditTag(tag.id) },
+                        )
+                    }
+                }
+            }
+            Text(
+                emphasize(lines.joinToString("\n")),
+                color = Mbp.Text,
+                fontSize = Mbp.type.lyrics,
+                lineHeight = Mbp.type.lyricsLine,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+        }
+    }
+}
+
+/** The mark of a stanza: its name and where it is. A tap goes there, a hold edits it. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MarkChip(label: String, time: Double, on: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Text(
+        "$label ${formatTimePrecise(time)}",
+        color = if (on) Mbp.Ink else Mbp.Accent,
+        fontFamily = Mbp.Mono,
+        fontSize = Mbp.type.caption,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .heightIn(min = 32.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (on) Mbp.Sc else Mbp.AccentDim)
+            .border(1.dp, if (on) Mbp.Sc else Mbp.Accent.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .wrapContentHeight(Alignment.CenterVertically),
+    )
+}
+
+/** A tag of the old kind: a name on a stanza. It goes to the mark of that name, if there is one. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TagChip(label: String, tied: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Text(
+        label,
+        color = if (tied) Mbp.Muted else Mbp.Faint,
+        fontFamily = Mbp.Mono,
+        fontSize = Mbp.type.caption,
+        modifier = Modifier
+            .heightIn(min = 32.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(Mbp.Bg)
+            .border(1.dp, Mbp.BorderStrong, RoundedCornerShape(999.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .wrapContentHeight(Alignment.CenterVertically),
+    )
 }
 
 @Composable
