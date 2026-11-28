@@ -8,7 +8,10 @@ import android.os.SystemClock
 import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
+import kotlin.concurrent.withLock
 
 /** Pulls stereo PCM from the Rust core into an [AudioTrack]. */
 class PcmFeeder(private val audio: NativeAudio) {
@@ -17,6 +20,15 @@ class PcmFeeder(private val audio: NativeAudio) {
     @Volatile var failed = false
         private set
     private var worker: Thread? = null
+    private val gate = ReentrantLock()
+    /** Signalled by [wake] while nothing plays. Asking the engine fifty times a second
+     *  whether it plays again cost more than everything else while a song was paused. */
+    private val resumed = gate.newCondition()
+
+    /** The engine was just told to play: the feed starts now instead of at its next look. */
+    fun wake() {
+        gate.withLock { resumed.signalAll() }
+    }
 
     fun start() {
         if (running) return
@@ -55,6 +67,7 @@ class PcmFeeder(private val audio: NativeAudio) {
 
     fun stop() {
         running = false
+        wake()
         worker?.join(500)
         worker = null
     }
@@ -105,18 +118,32 @@ class PcmFeeder(private val audio: NativeAudio) {
     /** Nothing plays: the stream is paused so that it does not hold the speaker open for silence. */
     private fun idle(track: AudioTrack) {
         // what was written last is the end of the song: let it play out
-        var waited = 0L
-        while (running && waited < DRAIN_MS && !audio.transport().playing) {
-            SystemClock.sleep(WATCH_MS)
-            waited += WATCH_MS
-        }
-        if (!running || audio.transport().playing) return
+        if (awaitPlaying(until = SystemClock.uptimeMillis() + DRAIN_MS)) return
         runCatching {
             track.pause()
             track.flush()
         }
-        while (running && !audio.transport().playing) SystemClock.sleep(WATCH_MS)
+        awaitPlaying()
         if (running) runCatching { track.play() }
+    }
+
+    /**
+     * Waits for the engine to play again, for [running] to end, or, with [until], for that
+     * moment to pass. Returns true when the engine plays and the feed still runs.
+     */
+    private fun awaitPlaying(until: Long? = null): Boolean {
+        gate.withLock {
+            while (running && !audio.transport().playing) {
+                val left = until?.let { it - SystemClock.uptimeMillis() } ?: Long.MAX_VALUE
+                if (left <= 0) return false
+                try {
+                    resumed.await(left, TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    // asked whether the engine plays again, as after any wake-up
+                }
+            }
+        }
+        return running && audio.transport().playing
     }
 
     companion object {
@@ -125,8 +152,6 @@ class PcmFeeder(private val audio: NativeAudio) {
         const val FRAMES = 1024
         /** A little longer than the track buffer, which holds 200 ms. */
         const val DRAIN_MS = 250L
-        /** How often the engine is asked whether it plays again. */
-        const val WATCH_MS = 20L
         const val CHANNELS = AudioFormat.CHANNEL_OUT_STEREO
         const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
     }
