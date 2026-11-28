@@ -272,11 +272,9 @@ private fun Waveform(model: PracticeModel, disabled: Boolean) {
                     }
                 },
         ) {
-            // In a layer of its own that clips to its bounds, and reading the playhead while it
-            // draws. The clipping is what keeps the redraw small: a layer that may draw outside
-            // its bounds makes the system repaint the whole window for each of the ten updates
-            // a second instead of this box.
-            Canvas(Modifier.fillMaxSize().graphicsLayer { clip = true }) {
+            // In its own layer, and reading the playhead while it draws: the ten updates a
+            // second redraw these bars and nothing above them.
+            Canvas(Modifier.fillMaxSize().graphicsLayer()) {
                 val progress = (model.position / duration).coerceIn(0f, 1f)
                 val played = progress * size.width
                 val loopLeft = loop?.let { (it.first / duration * size.width).toFloat() }
@@ -334,13 +332,12 @@ private fun Waveform(model: PracticeModel, disabled: Boolean) {
 private fun ElapsedTime(model: PracticeModel) {
     val measurer = rememberTextMeasurer()
     val style = LocalTextStyle.current.merge(TextStyle(color = Mbp.Muted, fontFamily = Mbp.Mono, fontSize = Mbp.type.label))
-    // a monospaced font makes every reading as wide as the longest one: the box keeps its size.
-    // The layer clips to its bounds so that a new reading only has that box repainted.
+    // a monospaced font makes every reading as wide as the longest one: the box keeps its size
     val room = with(LocalDensity.current) { measurer.measure(WidestReading, style).size.toSize().toDpSize() }
     Box(
         Modifier
             .size(room)
-            .graphicsLayer { clip = true }
+            .graphicsLayer()
             .drawBehind { drawText(measurer, formatTimePrecise(model.position.toDouble()), style = style) },
     )
 }
@@ -403,8 +400,7 @@ private fun Transport(model: PracticeModel, disabled: Boolean, showSkips: Boolea
                     animationSpec = infiniteRepeatable(tween(700, easing = LinearEasing)),
                     label = "deg",
                 )
-                // In a layer clipping to its bounds, so that the turns repaint the key only.
-                Canvas(Modifier.size(18.dp).graphicsLayer { clip = true }) {
+                Canvas(Modifier.size(18.dp)) {
                     rotate(spin) {
                         drawArc(Mbp.Bg, startAngle = 0f, sweepAngle = 270f, useCenter = false, style = Stroke(2.5.dp.toPx()))
                     }
@@ -677,9 +673,6 @@ private fun ChordReadout(
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier
             .width(readoutWidth(listOf("0".repeat(CHORD_SLOT)), Mbp.type.bodySm, FontWeight.Bold) + 20.dp)
-            // In a layer clipping to its bounds, so that a new chord has only this readout
-            // repainted instead of the whole window.
-            .graphicsLayer { clip = true }
             .clip(RoundedCornerShape(8.dp))
             .background(if (chordSheetOpen) Mbp.AccentDim else Mbp.BgElevated)
             .border(1.dp, if (shown != null) Mbp.Accent else Mbp.BorderStrong, RoundedCornerShape(8.dp))
