@@ -43,7 +43,6 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.LocalTextStyle
@@ -224,7 +223,7 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
                         )
                         Lyrics(
                             model,
-                            onAddMark = { markingStanza = it },
+                            onOpenStanza = { markingStanza = it },
                             onEditMark = { editingMark = it },
                             onEditTag = { editingTag = it },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -234,7 +233,7 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
                 } else {
                     Lyrics(
                         model,
-                        onAddMark = { markingStanza = it },
+                        onOpenStanza = { markingStanza = it },
                         onEditMark = { editingMark = it },
                         onEditTag = { editingTag = it },
                         modifier = Modifier.fillMaxSize(),
@@ -450,7 +449,15 @@ fun PracticeScreen(model: PracticeModel = viewModel(factory = ViewModelProvider.
     }
     val stanzaToMark = markingStanza
     if (stanzaToMark != null) {
-        StanzaSheet(model, stanzaToMark) { markingStanza = null }
+        StanzaSheet(
+            model,
+            stanzaToMark,
+            // a mark of the stanza picked in the panel: the panel gives way to its editor
+            onEditMark = {
+                markingStanza = null
+                editingMark = it
+            },
+        ) { markingStanza = null }
     }
     if (editingMark != null || editingTag != null) {
         SectionSheet(model, editingMark, editingTag) {
@@ -654,18 +661,14 @@ private const val EQ_SPEED = 12.0f
 /** The item of the lyric list that holds the card; the one before it is the head. */
 private const val CARD_ITEM = 1
 
-/** The gutter of the mark key beside a stanza, and the key in it. */
-private val StanzaGutter = 40.dp
-private val StanzaKey = 28.dp
-
 /** The top padding of the lyric card. The place of a stanza is measured without it. */
-private val CardPadTop = 16.dp
+private val CardPadTop = 12.dp
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Lyrics(
     model: PracticeModel,
-    onAddMark: (Int) -> Unit,
+    onOpenStanza: (Int) -> Unit,
     onEditMark: (String) -> Unit,
     onEditTag: (String) -> Unit,
     modifier: Modifier,
@@ -716,9 +719,10 @@ private fun Lyrics(
         listState.animateScrollToItem(CARD_ITEM, offset.coerceAtLeast(0))
     }
     // In a layer of its own, so that a change elsewhere does not record the whole lyric again.
+    // Little air around the card: on a phone every bit of the width is for the words.
     LazyColumn(
         modifier = modifier
-            .padding(top = topPad, start = 22.dp, end = 22.dp, bottom = 24.dp)
+            .padding(top = topPad, start = 12.dp, end = 12.dp, bottom = 24.dp)
             .graphicsLayer(),
         state = listState,
     ) {
@@ -747,7 +751,7 @@ private fun Lyrics(
                 }
             }
             Text(
-                "＋でマークを追加、⋯で編集。チップはタップで移動、長押しでも編集。",
+                "スタンザを長押しでマークの追加と編集。マークのあるスタンザはタップでそこへ移動。",
                 color = Mbp.Faint,
                 fontSize = Mbp.type.caption,
                 modifier = Modifier.padding(top = 10.dp, bottom = 18.dp),
@@ -760,7 +764,7 @@ private fun Lyrics(
                     .clip(RoundedCornerShape(12.dp))
                     .background(Mbp.BgElevated)
                     .border(1.dp, Mbp.Border, RoundedCornerShape(12.dp))
-                    .padding(start = 12.dp, top = CardPadTop, end = 18.dp, bottom = 12.dp),
+                    .padding(start = 14.dp, top = CardPadTop, end = 14.dp, bottom = 10.dp),
             ) {
                 when {
                     model.lyricsLoading -> Text("Loading lyrics…", color = Mbp.Muted, modifier = Modifier.padding(bottom = 12.dp))
@@ -796,7 +800,7 @@ private fun Lyrics(
                                         tags,
                                         activeMarkId = activeId,
                                         current = idx == activeStanza,
-                                        onAdd = { onAddMark(idx) },
+                                        onOpen = { onOpenStanza(idx) },
                                         onEditMark = onEditMark,
                                         onEditTag = onEditTag,
                                         modifier = Modifier.onGloballyPositioned { stanzaTops[idx] = it.positionInParent().y },
@@ -812,12 +816,13 @@ private fun Lyrics(
 }
 
 /**
- * One stanza of the lyrics with its marks. The key in the gutter opens a sheet: on a stanza
- * without a mark it is "＋", and the sheet puts one where the song is or ties one to the
- * stanza; on a stanza with a mark it is "⋯", and the sheet edits the first of them. The chips
- * go to their mark with a tap and open it for editing when they are held down. The stanza
- * the song is in is lit.
+ * One stanza of the lyrics with its marks. The stanza itself is the key, and the whole of its
+ * width is for the words: a tap goes to its first mark, or opens its panel where there is
+ * none; a hold opens the panel, where marks are added, tied and edited. The chips go to
+ * their mark with a tap and open it for editing when they are held down. The stanza the song
+ * is in is lit.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun StanzaBlock(
     model: PracticeModel,
@@ -826,73 +831,51 @@ private fun StanzaBlock(
     tags: List<StanzaTag>,
     activeMarkId: String?,
     current: Boolean,
-    onAdd: () -> Unit,
+    onOpen: () -> Unit,
     onEditMark: (String) -> Unit,
     onEditTag: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(modifier.fillMaxWidth()) {
-        Box(Modifier.width(StanzaGutter), contentAlignment = Alignment.TopCenter) {
-            val first = marks.firstOrNull()
-            Box(
-                Modifier
-                    .padding(top = 3.dp)
-                    .size(StanzaKey)
-                    .clip(CircleShape)
-                    .background(if (current) Mbp.Accent else Mbp.Bg)
-                    .border(1.dp, if (first == null) Mbp.BorderStrong else Mbp.Accent.copy(alpha = 0.7f), CircleShape)
-                    .clickable { if (first == null) onAdd() else onEditMark(first.id) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (first == null) "＋" else "⋯",
-                    color = when {
-                        current -> Mbp.Ink
-                        first == null -> Mbp.Muted
-                        else -> Mbp.Accent
-                    },
-                    fontSize = Mbp.type.body,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-        }
-        Column(
-            Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(if (current) Mbp.AccentDim else Color.Transparent)
-                .padding(horizontal = 6.dp),
-        ) {
-            if (marks.isNotEmpty() || tags.isNotEmpty()) {
-                Row(Modifier.padding(top = 2.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    marks.forEach { mark ->
-                        MarkChip(
-                            mark.label,
-                            mark.time,
-                            on = mark.id == activeMarkId,
-                            onClick = { model.seek(mark.time) },
-                            onLongClick = { onEditMark(mark.id) },
-                        )
-                    }
-                    tags.forEach { tag ->
-                        val tied = model.markers.firstOrNull { it.label == tag.label }
-                        TagChip(
-                            tag.label,
-                            tied = tied != null,
-                            onClick = { tied?.let { model.seek(it.time) } },
-                            onLongClick = { onEditTag(tag.id) },
-                        )
-                    }
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (current) Mbp.AccentDim else Color.Transparent)
+            .combinedClickable(
+                onClick = { marks.firstOrNull()?.let { model.seek(it.time) } ?: onOpen() },
+                onLongClick = onOpen,
+            )
+            .padding(horizontal = 6.dp),
+    ) {
+        if (marks.isNotEmpty() || tags.isNotEmpty()) {
+            Row(Modifier.padding(top = 2.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                marks.forEach { mark ->
+                    MarkChip(
+                        mark.label,
+                        mark.time,
+                        on = mark.id == activeMarkId,
+                        onClick = { model.seek(mark.time) },
+                        onLongClick = { onEditMark(mark.id) },
+                    )
+                }
+                tags.forEach { tag ->
+                    val tied = model.markers.firstOrNull { it.label == tag.label }
+                    TagChip(
+                        tag.label,
+                        tied = tied != null,
+                        onClick = { tied?.let { model.seek(it.time) } },
+                        onLongClick = { onEditTag(tag.id) },
+                    )
                 }
             }
-            Text(
-                emphasize(lines.joinToString("\n")),
-                color = Mbp.Text,
-                fontSize = Mbp.type.lyrics,
-                lineHeight = Mbp.type.lyricsLine,
-                modifier = Modifier.padding(bottom = 12.dp),
-            )
         }
+        Text(
+            emphasize(lines.joinToString("\n")),
+            color = Mbp.Text,
+            fontSize = Mbp.type.lyrics,
+            lineHeight = Mbp.type.lyricsLine,
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
     }
 }
 
