@@ -8,6 +8,8 @@ search endpoints, CSS selectors, and URL patterns are managed in config.yaml
 For each songs/<slug>/ that has a meta.json but no lyrics.md:
   1. Read title + artist from meta.json
   2. Perform search via configured primary provider endpoint -> candidate list
+     (again without a version in brackets at the end of the title, such as
+     "(Remastered)", when the site has nothing for the full title)
   3. Pick the candidate whose artist best matches meta.json's artist
   4. Fetch the song page and parse lyrics using configured CSS selectors
   5. Fallback to configured secondary provider if primary fails
@@ -269,15 +271,27 @@ def _slugify(s: str) -> str:
     return re.sub(r"\s+", "-", s.strip())
 
 
+def without_version(title: str) -> str:
+    """The title without a version in brackets at the end, such as "(Adult Version)" or
+    "(Remastered)": a lyrics site has the song, not the recording."""
+    return re.sub(r"\s*[(\[][^()\[\]]*[)\]]\s*$", "", title).strip()
+
+
+def fallback_url(artist: str, title: str) -> str:
+    # Genius spells the title of its addresses in lower case:
+    # genius.com/Metallica-master-of-puppets-lyrics
+    return FALLBACK_CFG.get("url_pattern", "").format(
+        artist=_slugify(artist), title=_slugify(title).lower()
+    )
+
+
 def fetch_fallback(artist: str, title: str) -> dict | None:
     url_pattern = FALLBACK_CFG.get("url_pattern")
     container_sel = FALLBACK_CFG.get("container_selector")
     if not url_pattern or not container_sel:
         return None
 
-    url = url_pattern.format(
-        artist=_slugify(artist), title=_slugify(title)
-    )
+    url = fallback_url(artist, title)
     try:
         html = get(url)
     except Exception:  # noqa: BLE001 — network/scrape failures mean "no lyrics"
@@ -361,21 +375,31 @@ def process_song(song_dir: Path, force: bool = False) -> str:
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     raw_title = meta.get("title", song_dir.name)
     title = clean_title(raw_title)
+    bare = without_version(title)
     artist = meta.get("artist", "")
 
-    best = None
     search_url = PRIMARY_CFG.get("search_url")
     song_url_pattern = PRIMARY_CFG.get("song_url_pattern")
 
-    try:
-        if search_url:
-            time.sleep(POLITE_DELAY)
-            candidates = search_songs(title)
-            best = pick_best(candidates, artist, title) if candidates else None
-        else:
-            candidates = []
-    except Exception:  # noqa: BLE001 — search failures fall through to other sources
-        candidates = []
+    # The full title first. A site that has nothing for it, or answers 404 for it, is
+    # asked again without the version: "(Adult Version)" and "(Remastered)" are the
+    # recording's, not the song's.
+    candidates: list[dict] = []
+    wanted = title
+    best = None
+    if search_url:
+        for variant in (title, bare):
+            if not variant:
+                continue
+            try:
+                time.sleep(POLITE_DELAY)
+                candidates = search_songs(variant)
+            except Exception:  # noqa: BLE001 — a search that fails found nothing
+                candidates = []
+            if candidates:
+                wanted = variant
+                break
+        best = pick_best(candidates, artist, wanted) if candidates else None
 
     if best and song_url_pattern:
         time.sleep(POLITE_DELAY)
@@ -385,13 +409,12 @@ def process_song(song_dir: Path, force: bool = False) -> str:
         source = "configured_primary"
     else:
         time.sleep(POLITE_DELAY)
-        parsed = fetch_fallback(artist, title)
+        parsed = fetch_fallback(artist, bare or title)
         if not parsed or not parsed["stanzas"]:
             return "not found (no matches)"
-        fallback_pattern = FALLBACK_CFG.get("url_pattern", "")
-        url = fallback_pattern.format(
-            artist=_slugify(artist), title=_slugify(title)
-        )
+        # the site gives no title of its own: the song's, without the recording's version
+        parsed["title"] = bare or title
+        url = fallback_url(artist, bare or title)
         source = "configured_fallback"
 
     md = to_markdown(meta, parsed, url)
