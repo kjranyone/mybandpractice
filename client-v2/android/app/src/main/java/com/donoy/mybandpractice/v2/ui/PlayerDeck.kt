@@ -7,9 +7,11 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -73,7 +75,7 @@ import com.donoy.mybandpractice.v2.PlaybackMode
 import com.donoy.mybandpractice.v2.PracticeModel
 import com.donoy.mybandpractice.v2.formatGain
 import com.donoy.mybandpractice.v2.formatTimePrecise
-import com.donoy.mybandpractice.v2.suggestMarkerLabel
+import com.donoy.mybandpractice.v2.nextMarkLabel
 import com.donoy.mybandpractice.v2.syntheticPeaks
 import com.donoy.mybandpractice.v2.toLeadSheetNotation
 import com.donoy.mybandpractice.v2.transposeChord
@@ -103,6 +105,8 @@ fun PlayerDeck(
     onOpenMixer: () -> Unit,
     mixerOpen: Boolean,
     compact: Boolean,
+    // A mark on the waveform, held down: it is edited in the sheet.
+    onEditMarker: (String) -> Unit = {},
 ) {
     val song = model.current
     val disabled = song?.chunksDir == null
@@ -114,7 +118,7 @@ fun PlayerDeck(
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Waveform(model, disabled)
+        Waveform(model, disabled, onEditMarker)
         if (compact) {
             Info(model, chordSheetOpen, onToggleChordSheet, disabled, Modifier.fillMaxWidth())
             // The keys share a line with the chip while they fit. Larger fonts stack the chip
@@ -177,8 +181,9 @@ private fun Info(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Waveform(model: PracticeModel, disabled: Boolean) {
+private fun Waveform(model: PracticeModel, disabled: Boolean, onEditMarker: (String) -> Unit) {
     val song = model.current
     val peaks = if (model.peaks.size >= 8) model.peaks else syntheticPeaks(song?.slug ?: "empty", 140)
     val duration = model.duration.coerceAtLeast(0.01f)
@@ -244,7 +249,7 @@ private fun Waveform(model: PracticeModel, disabled: Boolean) {
                                         model.endDrag(timeAt(x, width))
                                         val now = change.uptimeMillis
                                         if (!moved && now - lastTap < 280 && abs(x - lastX) < 48.dp.toPx() && model.current != null) {
-                                            model.addMarker(timeAt(x, width).toDouble(), suggestMarkerLabel(model.markers.size))
+                                            model.addMarker(timeAt(x, width).toDouble(), nextMarkLabel(model.markers))
                                         }
                                         lastTap = now
                                         lastX = x
@@ -305,6 +310,7 @@ private fun Waveform(model: PracticeModel, disabled: Boolean) {
             }
             model.markers.forEach { marker ->
                 val x = ((marker.time / duration) * widthPx)
+                // A tap goes there, a hold opens the mark for editing.
                 Text(
                     marker.label,
                     color = Mbp.Text,
@@ -314,7 +320,7 @@ private fun Waveform(model: PracticeModel, disabled: Boolean) {
                         .offset { IntOffset(x.roundToInt() - 18, if (marker.row == 1) 20 else 2) }
                         .background(androidx.compose.ui.graphics.Color(0xF00F172A), RoundedCornerShape(4.dp))
                         .border(1.dp, androidx.compose.ui.graphics.Color(0x8094A3B8), RoundedCornerShape(4.dp))
-                        .clickable { model.seek(marker.time) }
+                        .combinedClickable(onClick = { model.seek(marker.time) }, onLongClick = { onEditMarker(marker.id) })
                         .padding(horizontal = 4.dp, vertical = 1.dp),
                 )
             }

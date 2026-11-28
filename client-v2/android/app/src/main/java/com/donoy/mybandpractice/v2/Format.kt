@@ -1,5 +1,6 @@
 package com.donoy.mybandpractice.v2
 
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.max
@@ -69,8 +70,25 @@ fun formatBytes(n: Long): String {
     return "${"%.1f".format(v)} ${units[i]}"
 }
 
-fun suggestMarkerLabel(existingCount: Int): String =
-    MARKER_PRESETS.getOrElse(existingCount) { "M${existingCount + 1}" }
+/** The name for a new mark: the first of the usual names that no mark has yet. */
+fun nextMarkLabel(markers: List<Marker>): String {
+    val used = markers.map { it.label }.toSet()
+    return MARKER_PRESETS.firstOrNull { it !in used } ?: "M${markers.size + 1}"
+}
+
+/** How far from the playhead a mark may be to count as the one that was meant. */
+const val MARK_LINK_WINDOW = 2.0
+
+/** The mark within [MARK_LINK_WINDOW] seconds of a time, the nearest one. */
+fun markerNear(markers: List<Marker>, time: Double): Marker? =
+    markers.filter { abs(it.time - time) <= MARK_LINK_WINDOW }.minByOrNull { abs(it.time - time) }
+
+/**
+ * Where the section that starts at [start] ends: at the next mark that leaves a loop long
+ * enough to be one, or at the end of the song.
+ */
+fun sectionEnd(markers: List<Marker>, start: Double, duration: Double): Double =
+    markers.asSequence().map { it.time }.filter { it > start + MIN_LOOP }.minOrNull() ?: duration
 
 fun transposeChord(chord: String, semitones: Int): String {
     if (chord.isBlank() || chord == "N.C." || semitones == 0) return chord

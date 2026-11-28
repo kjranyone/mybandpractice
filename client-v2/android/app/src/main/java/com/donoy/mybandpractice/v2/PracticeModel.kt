@@ -376,11 +376,57 @@ class PracticeModel(app: Application) : AndroidViewModel(app) {
         rememberLoop()
     }
 
-    fun addMarker(time: Double, label: String) {
+    fun addMarker(time: Double, label: String, stanzaIndex: Int? = null) {
         val song = current ?: return
-        val text = label.trim().ifBlank { suggestMarkerLabel(markers.size) }
-        markers = (markers + Marker(newId(), time, text, pickMarkerRow(markers, time))).sortedBy { it.time }
+        val text = label.trim().ifBlank { nextMarkLabel(markers) }
+        markers = (markers + Marker(newId(), time, text, pickMarkerRow(markers, time), stanzaIndex)).sortedBy { it.time }
         schedulePracticeSave(song)
+    }
+
+    /**
+     * Puts the start of a stanza where the song is now: a mark at the playhead, tied to that
+     * stanza. A mark that is already within a moment of the playhead is tied to the stanza
+     * instead, so that a second tap does not make a twin of it.
+     */
+    fun markStanza(stanzaIndex: Int) {
+        if (current == null) return
+        val now = position.toDouble()
+        val near = markerNear(markers, now)
+        when {
+            near == null -> addMarker(now, nextMarkLabel(markers), stanzaIndex)
+            near.stanzaIndex != stanzaIndex -> updateMarker(near.id, stanzaIndex = stanzaIndex)
+        }
+    }
+
+    /**
+     * Loops the section that starts at a mark, up to the next mark or to the end of the
+     * song, and puts the song at the start of it. A paused song stays paused.
+     */
+    fun loopFromMarker(id: String) {
+        val mark = markers.firstOrNull { it.id == id } ?: return
+        val end = sectionEnd(markers, mark.time, duration.toDouble())
+        if (end - mark.time < MIN_LOOP) return
+        loopStart = mark.time
+        loopEnd = end
+        loopEnabled = true
+        rememberLoop()
+        seek(mark.time)
+    }
+
+    /**
+     * Ties a tag of the old kind, a label on a stanza with no time of its own, to a mark, so
+     * that it can be jumped to and edited like any other: the mark at the playhead if there
+     * is one, else the mark of its name, else a new one at the playhead.
+     */
+    fun anchorStanzaTag(id: String) {
+        val tag = stanzaTags.firstOrNull { it.id == id } ?: return
+        val now = position.toDouble()
+        val target = markerNear(markers, now) ?: markers.firstOrNull { it.label == tag.label }
+        if (target != null) {
+            updateMarker(target.id, label = tag.label, stanzaIndex = tag.stanzaIndex)
+        } else {
+            addMarker(now, tag.label, tag.stanzaIndex)
+        }
     }
 
     fun updateMarker(id: String, time: Double? = null, label: String? = null, stanzaIndex: Int? = null, clearStanza: Boolean = false) {
