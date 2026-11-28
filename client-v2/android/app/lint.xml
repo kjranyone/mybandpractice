@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Kotlin bindings in core/mbp_ffi.kt are written by uniffi-bindgen (build-android.ps1),
+  so nothing in them is edited by hand. Their cleaner looks for java.lang.ref.Cleaner with
+  Class.forName before it uses it, and takes JNA's where that class is missing (before API
+  33). Lint only sees the call, and reports it as NewApi.
+-->
+<lint>
+    <issue id="NewApi">
+        <ignore regexp="mbp_ffi\.kt" />
+    </issue>
+</lint>
