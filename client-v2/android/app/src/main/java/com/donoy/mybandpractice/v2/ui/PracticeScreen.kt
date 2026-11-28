@@ -727,12 +727,17 @@ private fun Lyrics(
         state = listState,
     ) {
         item {
-            // No title and artist here: the player below names the song, and the lyric file
-            // repeats it in its first lines, which are left out of the card for that reason.
+            // The name of the song once, at the top: the heading and the artist that the
+            // lyric file starts with (they are left out of the card below, so they are not
+            // twice), or what the library knows where the file has neither.
+            val heading = model.lyrics.filterIsInstance<LyricsBlock.Heading>().firstOrNull()?.text
+            val performer = model.lyrics.filterIsInstance<LyricsBlock.Artist>().firstOrNull()?.text
+            Text(heading ?: song.title, color = Mbp.Text, fontSize = Mbp.type.song, fontWeight = FontWeight.Bold, lineHeight = Mbp.type.songLine)
+            Text(performer ?: song.artist, color = Mbp.Muted, fontSize = Mbp.type.title, modifier = Modifier.padding(top = 6.dp))
             // The credits wrap chip by chip: a long name goes to the next line whole. The slug
             // is not shown: it is the folder's name, not something to read.
             FlowRow(
-                Modifier.padding(bottom = 14.dp),
+                Modifier.padding(top = 12.dp, bottom = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -772,7 +777,7 @@ private fun Lyrics(
                         val activeId = activeMarker?.id
                         model.lyrics.forEach { block ->
                             when (block) {
-                                // the name of the song and who plays it: the player says so
+                                // the name of the song and who plays it: they are at the top
                                 is LyricsBlock.Heading -> Unit
                                 is LyricsBlock.Artist -> Unit
                                 is LyricsBlock.Section -> Text(
